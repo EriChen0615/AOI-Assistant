@@ -24,6 +24,7 @@ from enum import Enum, auto
 import queue
 import time
 import threading
+import platform
 
 # Set up logging with more detailed format
 logging.basicConfig(
@@ -39,13 +40,15 @@ logging.basicConfig(
 logger = logging.getLogger('AsyncAOI')
 
 class EventType(Enum):
-    """All possible event types in the system"""
+    """Event types in the system"""
     RECORDING_START = auto()
     RECORDING_STOP = auto()
     TRANSCRIPTION = auto()
     LLM_RESPONSE = auto()
     ERROR = auto()
     STATUS_UPDATE = auto()
+    TTS_START = auto()
+    TTS_COMPLETE = auto()
 
 @dataclass
 class Event:
@@ -94,6 +97,10 @@ class EventBus:
             if component != event.source:  # Don't send back to source
                 await self._queues[component].put(event)
                 self._logger.debug(f"Sent {event.type.name} to {component}")
+
+    async def emit(self, event: Event):
+        """Emit an event to all subscribed components"""
+        await self.publish(event)
 
 class AudioRecorder:
     """Handles audio recording using PyAudio"""
@@ -454,6 +461,123 @@ class AIResponder:
             except Exception as e:
                 self._logger.error(f"Error in AIResponder: {e}")
 
+class Speaker:
+    """Handles text-to-speech using OpenAI's TTS model"""
+    def __init__(self, event_bus: EventBus, model_name: str = "tts-1"):
+        self.event_bus = event_bus
+        self.model_name = model_name
+        self._logger = logging.getLogger('Speaker')
+        self._queue = event_bus.register_queue('Speaker')
+        self._init_model()
+        self._welcome_said = False
+        self._speaking = False
+        event_bus.subscribe('Speaker', {
+            EventType.LLM_RESPONSE,
+            EventType.ERROR,
+            EventType.STATUS_UPDATE
+        })
+
+    def _init_model(self):
+        """Initialize OpenAI client"""
+        try:
+            with open('configs/openai_api_key', 'r') as f:
+                api_key = f.read().strip()
+            if not api_key:
+                raise ValueError("API key file is empty")
+            self.client = openai.OpenAI(api_key=api_key)
+            self._logger.info("OpenAI client initialized for TTS")
+        except Exception as e:
+            self._logger.error(f"Error initializing OpenAI client for TTS: {e}")
+            raise
+
+    async def _speak(self, text: str):
+        """Convert text to speech and play it"""
+        if self._speaking:
+            self._logger.warning("Already speaking, ignoring new speech request")
+            return
+
+        try:
+            self._speaking = True
+            self._logger.info(f"Converting to speech: {text[:100]}...")
+            await self.event_bus.emit(Event(
+                type=EventType.TTS_START,
+                content="Speaking...",
+                timestamp=time.time(),
+                source="Speaker"
+            ))
+
+            # Generate speech using non-streaming API
+            response = self.client.audio.speech.create(
+                model=self.model_name,
+                voice="nova",
+                input=text
+            )
+
+            # Save to temporary file
+            temp_file = f"temp_speech_{int(time.time())}.mp3"
+            response.stream_to_file(temp_file)
+
+            # Play the audio
+            try:
+                if platform.system() == 'Darwin':  # macOS
+                    os.system(f'afplay {temp_file}')
+                elif platform.system() == 'Linux':
+                    os.system(f'mpg123 {temp_file}')
+                elif platform.system() == 'Windows':
+                    os.system(f'start {temp_file}')
+                else:
+                    self._logger.warning(f"Unsupported platform for audio playback: {platform.system()}")
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.remove(temp_file)
+                except Exception as e:
+                    self._logger.error(f"Error removing temporary file: {e}")
+
+            await self.event_bus.emit(Event(
+                type=EventType.TTS_COMPLETE,
+                content="Speech complete",
+                timestamp=time.time(),
+                source="Speaker"
+            ))
+
+        except Exception as e:
+            self._logger.error(f"Error in text-to-speech: {e}")
+            await self.event_bus.emit(Event(
+                type=EventType.ERROR,
+                content=f"Text-to-speech error: {e}",
+                timestamp=time.time(),
+                source="Speaker"
+            ))
+        finally:
+            self._speaking = False
+            # Always emit ready status after speaking is done
+            await self.event_bus.emit(Event(
+                type=EventType.STATUS_UPDATE,
+                content="ready",
+                timestamp=time.time(),
+                source="Speaker"
+            ))
+
+    async def run(self):
+        """Main event processing loop"""
+        self._logger.info("Speaker started")
+        
+        # Say welcome message only once at startup
+        if not self._welcome_said:
+            await self._speak("Hi! This is AOI. I am your personal assistant.")
+            self._welcome_said = True
+
+        while True:
+            try:
+                event = await self._queue.get()
+                if event.type == EventType.LLM_RESPONSE and not self._speaking:
+                    await self._speak(event.content)
+                elif event.type == EventType.ERROR and not self._speaking:
+                    await self._speak(f"I encountered an error: {event.content}")
+            except Exception as e:
+                self._logger.error(f"Error in Speaker: {e}")
+
 class ConsoleUI:
     """Handles console input/output"""
     def __init__(self, event_bus: EventBus):
@@ -461,52 +585,32 @@ class ConsoleUI:
         self._logger = logging.getLogger('ConsoleUI')
         self._queue = event_bus.register_queue('ConsoleUI')
         self._waiting_for_response = False
-        self._last_event_time = 0  # Track last event time
+        self._last_event_time = 0
+        self._initialized = False
+        self._speaking = False
         event_bus.subscribe('ConsoleUI', {
             EventType.RECORDING_START,
             EventType.RECORDING_STOP,
             EventType.TRANSCRIPTION,
             EventType.LLM_RESPONSE,
             EventType.ERROR,
-            EventType.STATUS_UPDATE
+            EventType.STATUS_UPDATE,
+            EventType.TTS_START,
+            EventType.TTS_COMPLETE
         })
-
-    async def _handle_event(self, event: Event):
-        """Process and display events"""
-        current_time = event.timestamp
-        # Prevent duplicate events within 0.1 seconds
-        if current_time - self._last_event_time < 0.1:
-            return
-        self._last_event_time = current_time
-
-        if event.type == EventType.RECORDING_START:
-            print("\rRecording... Release space to stop", end="", flush=True)
-            self._waiting_for_response = False
-        elif event.type == EventType.RECORDING_STOP:
-            print("\rTranscribing...", end="", flush=True)
-            self._waiting_for_response = True
-        elif event.type == EventType.TRANSCRIPTION:
-            print(f"\nYou said: {event.content}")
-        elif event.type == EventType.LLM_RESPONSE:
-            print(f"\nAI: {event.content}")
-            print("\rPress space to start speaking", end="", flush=True)
-            self._waiting_for_response = False
-        elif event.type == EventType.ERROR:
-            print(f"\nError: {event.content}")
-            print("\rPress space to start speaking", end="", flush=True)
-            self._waiting_for_response = False
-        elif event.type == EventType.STATUS_UPDATE:
-            if event.content == "ready" and not self._waiting_for_response:
-                print("\rPress space to start speaking", end="", flush=True)
 
     async def run(self):
         """Main event processing loop"""
         self._logger.info("ConsoleUI started")
-        print("\n=== Welcome to Async-AOI ===")
-        print("A minimal AI system that listens and responds to your voice.")
-        print("Press and hold SPACE to start recording, release to stop.")
-        print("Press Ctrl+C to exit.\n")
-        print("Press space to start speaking", end="", flush=True)
+        
+        # Print welcome message only once
+        if not self._initialized:
+            print("\n=== Welcome to Async-AOI ===")
+            print("A minimal AI system that listens and responds to your voice.")
+            print("Press and hold SPACE to start recording, release to stop.")
+            print("Press Ctrl+C to exit.\n")
+            self._initialized = True
+            # Don't print "Press space" here, wait for ready status
 
         while True:
             try:
@@ -515,6 +619,42 @@ class ConsoleUI:
             except Exception as e:
                 self._logger.error(f"Error in ConsoleUI: {e}")
 
+    async def _handle_event(self, event: Event):
+        """Process and display events"""
+        current_time = event.timestamp
+        if current_time - self._last_event_time < 0.1:
+            return
+        self._last_event_time = current_time
+
+        if event.type == EventType.RECORDING_START:
+            print("\rRecording... Release space to stop", end="", flush=True)
+            self._waiting_for_response = False
+            self._speaking = False
+        elif event.type == EventType.RECORDING_STOP:
+            print("\rTranscribing...", end="", flush=True)
+            self._waiting_for_response = True
+            self._speaking = False
+        elif event.type == EventType.TRANSCRIPTION:
+            print(f"\nYou said: {event.content}")
+        elif event.type == EventType.LLM_RESPONSE:
+            print(f"\nAI: {event.content}")
+            self._waiting_for_response = True
+        elif event.type == EventType.ERROR:
+            print(f"\nError: {event.content}")
+            self._waiting_for_response = True
+        elif event.type == EventType.STATUS_UPDATE:
+            if event.content == "ready":
+                self._waiting_for_response = False
+                self._speaking = False
+                print("\rPress space to start speaking", end="", flush=True)
+        elif event.type == EventType.TTS_START:
+            self._speaking = True
+            print("\rSpeaking...", end="", flush=True)
+        elif event.type == EventType.TTS_COMPLETE:
+            self._speaking = False
+            if not self._waiting_for_response:
+                print("\rPress space to start speaking", end="", flush=True)
+
 async def main():
     """Main entry point"""
     try:
@@ -522,15 +662,17 @@ async def main():
         event_bus = EventBus()
         audio_listener = AudioListener(event_bus)
         ai_responder = AIResponder(event_bus)
+        speaker = Speaker(event_bus)
         console_ui = ConsoleUI(event_bus)
 
         # Start components
         await audio_listener.start()
         responder_task = asyncio.create_task(ai_responder.run())
+        speaker_task = asyncio.create_task(speaker.run())
         ui_task = asyncio.create_task(console_ui.run())
 
         # Wait for tasks
-        await asyncio.gather(responder_task, ui_task)
+        await asyncio.gather(responder_task, speaker_task, ui_task)
 
     except KeyboardInterrupt:
         logger.info("Shutting down...")
