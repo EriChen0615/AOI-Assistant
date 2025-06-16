@@ -1,2 +1,4 @@
 configs/openai_api_key
 __pycache__/
+*.wav
+*.log

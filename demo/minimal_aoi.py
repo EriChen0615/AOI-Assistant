@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import threading
 import queue
-from typing import Dict, Set, Any
+from typing import Dict, Set, Any, Callable
 import openai
 import pyaudio
 import wave
@@ -21,6 +21,41 @@ import tempfile
 import os
 import platform
 import sys
+import logging
+import functools
+import datetime
+import json
+import copy
+
+# Set up logging
+logging.basicConfig(
+    filename='aoi_events.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+def log_event(func: Callable) -> Callable:
+    """Decorator to log events in the system"""
+    @functools.wraps(func)
+    def wrapper(self, event: AOIEvent, *args, **kwargs):
+        # Log the event before handling
+        logging.info(f"Event received in {self.name}: {json.dumps(event.meta_data)} - Content: {event.content[:100]}")
+        try:
+            result = func(self, event, *args, **kwargs)
+            logging.info(f"Event handled successfully in {self.name}")
+            return result
+        except Exception as e:
+            logging.error(f"Error handling event in {self.name}: {str(e)}")
+            raise
+    return wrapper
+
+def log_emit(func: Callable) -> Callable:
+    """Decorator to log event emissions"""
+    @functools.wraps(func)
+    def wrapper(self, event: AOIEvent, *args, **kwargs):
+        logging.info(f"Event emitted from {self.name}: {json.dumps(event.meta_data)} - Content: {event.content[:100]}")
+        return func(self, event, *args, **kwargs)
+    return wrapper
 
 @dataclass
 class AOIEvent:
@@ -53,6 +88,7 @@ class AudioRecorder:
         self.frames = []
         self.p = None
         self.stream = None
+        self.last_audio_file = None  # Keep track of the last recorded file
 
     def start_recording(self):
         if self.recording:
@@ -60,6 +96,7 @@ class AudioRecorder:
             
         self.recording = True
         self.frames = []
+        logging.info("Starting audio recording")
         
         try:
             self.p = pyaudio.PyAudio()
@@ -78,41 +115,54 @@ class AudioRecorder:
                         data = self.stream.read(self.CHUNK, exception_on_overflow=False)
                         self.frames.append(data)
                     except Exception as e:
-                        print(f"Error reading audio: {e}")
+                        logging.error(f"Error reading audio: {e}")
                         break
             
             self.record_thread = threading.Thread(target=record)
-            self.record_thread.daemon = True  # Make thread daemon so it exits when main thread exits
+            self.record_thread.daemon = True
             self.record_thread.start()
+            logging.info("Audio recording thread started")
             
         except Exception as e:
-            print(f"Error starting recording: {e}")
+            logging.error(f"Error starting recording: {e}")
             self.cleanup()
             raise
 
     def stop_recording(self):
         if not self.recording:
+            logging.warning("Attempted to stop recording when not recording")
             return None
             
         self.recording = False
+        logging.info("Stopping audio recording")
+        
         if self.record_thread:
             self.record_thread.join(timeout=1.0)
         
         if not self.frames:
+            logging.warning("No audio frames recorded")
             return None
             
         try:
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                wf = wave.open(temp_file.name, 'wb')
-                wf.setnchannels(self.CHANNELS)
-                wf.setsampwidth(self.p.get_sample_size(self.FORMAT))
-                wf.setframerate(self.RATE)
-                wf.writeframes(b''.join(self.frames))
-                wf.close()
-                return temp_file.name
+            # Create a timestamped filename in the current directory
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"recording_{timestamp}.wav"
+            
+            # Save the recording
+            wf = wave.open(filename, 'wb')
+            wf.setnchannels(self.CHANNELS)
+            wf.setsampwidth(self.p.get_sample_size(self.FORMAT))
+            wf.setframerate(self.RATE)
+            wf.writeframes(b''.join(self.frames))
+            wf.close()
+            
+            self.last_audio_file = filename
+            logging.info(f"Audio saved to {filename}")
+            print(f"\nAudio saved to {filename} for inspection")
+            return filename
+            
         except Exception as e:
-            print(f"Error saving recording: {e}")
+            logging.error(f"Error saving recording: {e}")
             return None
         finally:
             self.cleanup()
@@ -144,6 +194,7 @@ class AOIModule(ABC):
         self._thread = None
         self._stop_event = threading.Event()
     
+    @log_emit
     def emit_event(self, event: AOIEvent):
         self.output_queue.put(event)
     
@@ -170,16 +221,36 @@ class AOIModule(ABC):
         while not self._stop_event.is_set():
             try:
                 event = self.input_queue.get(timeout=1.0)
+                print(f"Module {self.name} got event: {event.meta_data['type']}")
                 self.handle_event(event)
             except queue.Empty:
                 continue
 
 class AOIListener(AOIModule):
-    def __init__(self, input_queue: queue.Queue, output_queue: queue.Queue):
+    def __init__(self, input_queue: queue.Queue, output_queue: queue.Queue, model_name: str = "gpt-4o-transcribe"):
         super().__init__("Listener", input_queue, output_queue)
         self.recorder = AudioRecorder()
         self._keyboard_listener = None
+        self.model_name = model_name
+        self._init_model()
+        self._pressed = False
         # Initial status will be set by Dispatcher
+    
+    def _init_model(self):
+        if self.model_name in ['gpt-4o-transcribe']:
+            try:
+                with open('configs/openai_api_key', 'r') as f:
+                    api_key = f.read().strip()
+                if not api_key:
+                    raise ValueError("API key file is empty")
+                print("Successfully loaded API key")
+                self.client = openai.OpenAI(api_key=api_key)
+            except Exception as e:
+                print(f"Error initializing OpenAI client: {str(e)}")
+                raise
+        else:
+            raise NotImplementedError(f"Model name = {self.model_name} is not supported!")
+    
 
     def initialize(self):
         # Try to start the listener anyway, it might work if permissions are already granted
@@ -201,16 +272,21 @@ class AOIListener(AOIModule):
                 print("5. Restart the application\n")
                 sys.exit(1)
     
+    @log_event
     def handle_event(self, event: AOIEvent):
         pass
 
     def _on_key_press(self, key):
         if key == keyboard.Key.space:
-            self.emit_event(AOIEvent(
-                meta_data={"sent_from": self.name, "type": "recording_start"},
-                content=""
-            ))
-            self.recorder.start_recording()
+            if not self._pressed:
+                self.emit_event(AOIEvent(
+                    meta_data={"sent_from": self.name, "type": "recording_start"},
+                    content=""
+                ))
+                self._pressed = True
+                self.recorder.start_recording()
+            else:
+                pass
 
     def _on_key_release(self, key):
         if key == keyboard.Key.space:
@@ -220,7 +296,8 @@ class AOIListener(AOIModule):
             ))
             
             audio_file = self.recorder.stop_recording()
-            if not audio_file:  # Handle case where no audio was recorded
+            if not audio_file:
+                logging.warning("No audio file was recorded")
                 self.emit_event(AOIEvent(
                     meta_data={"sent_from": self.name, "type": "status_update"},
                     content="ready"
@@ -228,9 +305,10 @@ class AOIListener(AOIModule):
                 return
             
             try:
+                print(f"\nTranscribing audio file: {audio_file}")
                 with open(audio_file, "rb") as f:
                     transcript = self.client.audio.transcriptions.create(
-                        model="whisper-1",
+                        model=self.model_name,
                         file=f
                     )
                 
@@ -239,18 +317,9 @@ class AOIListener(AOIModule):
                     meta_data={"sent_from": self.name, "type": "transcription"},
                     content=transcript.text
                 ))
-                
-                # Emit user input event
-                self.emit_event(AOIEvent(
-                    meta_data={"sent_from": self.name, "type": "user_input"},
-                    content=transcript.text
-                ))
             except Exception as e:
-                print(f"Error in transcription: {e}")
-            finally:
-                if audio_file and os.path.exists(audio_file):
-                    os.unlink(audio_file)
-                # Request status update
+                logging.error(f"Error in transcription: {e}")
+                print(f"\nError in transcription: {e}")
                 self.emit_event(AOIEvent(
                     meta_data={"sent_from": self.name, "type": "status_update"},
                     content="ready"
@@ -265,26 +334,32 @@ class AOIListener(AOIModule):
 class AOIDisplayer(AOIModule):
     def __init__(self, input_queue: queue.Queue, output_queue: queue.Queue):
         super().__init__("Displayer", input_queue, output_queue)
+        self._waiting_for_response = False
 
     def initialize(self):
         print("\n=== Welcome to Min-AOI ===")
         print("A minimal AI system that listens and responds to your voice.")
         print("Press and hold SPACE to start recording, release to stop.")
         print("Press Ctrl+C to exit.\n")
-        print("Press space to start speaking", flush=True)
+        print("Press space to start speaking", end="", flush=True)
 
+    @log_event
     def handle_event(self, event: AOIEvent):
         event_meta = event.meta_data
         if event_meta["type"] == "recording_start":
             print("\rRecording... Release space to stop", end="", flush=True)
+            self._waiting_for_response = False
         elif event_meta["type"] == "recording_stop":
             print("\rTranscribing...", end="", flush=True)
+            self._waiting_for_response = True
         elif event_meta["type"] == "transcription":
             print(f"\nYou said: {event.content}")
         elif event_meta["type"] == "llm_output":
-            print(f"AI: {event.content}")
+            print(f"\nAI: {event.content}")
+            print("\rPress space to start speaking", end="", flush=True)
+            self._waiting_for_response = False
         elif event_meta["type"] == "status_update":
-            if event.content == "ready":
+            if event.content == "ready" and not self._waiting_for_response:
                 print("\rPress space to start speaking", end="", flush=True)
 
 class Controller(AOIModule):
@@ -309,31 +384,47 @@ class Controller(AOIModule):
             raise NotImplementedError(f"Model name = {model_name} is not supported!")
     
     def initialize(self):
-        pass
+        logging.info("Controller initialized")
     
+    @log_event
     def handle_event(self, event: AOIEvent):
-        if event.meta_data["type"] == "user_input":
+        if event.meta_data["type"] == "transcription":
+            logging.info(f"Controller received transcription: {event.content[:100]}")
             try:
+                # print("\nGenerating response...", end="", flush=True)
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": event.content}]
                 )
                 output = response.choices[0].message.content
+                logging.info(f"Controller generated response: {output[:100]}")
+                # print("\rResponse generated!", end="", flush=True)
+                
                 # Emit LLM output event
                 self.emit_event(AOIEvent(
                     meta_data={"sent_from": self.name, "type": "llm_output"},
                     content=output
                 ))
             except Exception as e:
-                print(f"Error in Controller: {e}")
+                error_msg = f"Error in Controller: {e}"
+                logging.error(error_msg)
+                print(f"\n{error_msg}")
+                # Emit error event to displayer
+                self.emit_event(AOIEvent(
+                    meta_data={"sent_from": self.name, "type": "error"},
+                    content=error_msg
+                ))
 
 class Dispatcher:
     def __init__(self):
         self.memory = Memory()
-        # Create queues for each module
-        self.listener_queue = queue.Queue()
-        self.displayer_queue = queue.Queue()
-        self.controller_queue = queue.Queue()
+        # Create queues for each module's input and output
+        self.listener_input_queue = queue.Queue()
+        self.listener_output_queue = queue.Queue()
+        self.displayer_input_queue = queue.Queue()
+        self.displayer_output_queue = queue.Queue()
+        self.controller_input_queue = queue.Queue()
+        self.controller_output_queue = queue.Queue()
         self._stop_event = threading.Event()
         self._thread = None
         self.modules = {}
@@ -362,10 +453,19 @@ class Dispatcher:
     def _run(self):
         while not self._stop_event.is_set():
             # Check all module output queues
-            for module_name, module in self.modules.items():
+            queues_to_check = {
+                "Listener": self.listener_output_queue,
+                "Displayer": self.displayer_output_queue,
+                "Controller": self.controller_output_queue
+            }
+            
+            for module_name, output_queue in queues_to_check.items():
                 try:
-                    event = module.output_queue.get_nowait()
-                    self._handle_event(event)
+                    event = output_queue.get_nowait()
+                    # Process the event
+                    self._handle_event(copy.deepcopy(event))
+                    # Now remove it from the queue
+                    output_queue.get()  # Remove the event we just processed
                 except queue.Empty:
                     continue
     
@@ -374,33 +474,50 @@ class Dispatcher:
         if event_meta["sent_from"] == "Listener":
             if event_meta["type"] == "recording_start":
                 self.memory.write("recording_status", "recording")
-                self.displayer_queue.put(event)
+                self.displayer_input_queue.put(event)
             elif event_meta["type"] == "recording_stop":
                 self.memory.write("recording_status", "transcribing")
-                self.displayer_queue.put(event)
+                self.displayer_input_queue.put(event)
             elif event_meta["type"] == "transcription":
                 self.memory.write("transcription", event.content)
-                self.displayer_queue.put(event)
-            elif event_meta["type"] == "user_input":
                 self.memory.write("user_input", event.content)
-                self.controller_queue.put(event)
+                self.displayer_input_queue.put(event)
+                self.controller_input_queue.put(event)
             elif event_meta["type"] == "status_update":
                 self.memory.write("recording_status", event.content)
-                self.displayer_queue.put(event)
+                self.displayer_input_queue.put(event)
+            else:
+                logging.warning(f"Unknown event type from Listener: {event_meta['type']}")
         elif event_meta["sent_from"] == "Controller":
             if event_meta["type"] == "llm_output":
                 self.memory.write("llm_output", event.content)
-                self.displayer_queue.put(event)
+                self.displayer_input_queue.put(event)
                 # Clear user input after processing
                 self.memory.write("user_input", None)
+                # Send ready status
+                self.displayer_input_queue.put(AOIEvent(
+                    meta_data={"sent_from": "Dispatcher", "type": "status_update"},
+                    content="ready"
+                ))
+            elif event_meta["type"] == "error":
+                self.displayer_input_queue.put(event)
+                # Send ready status after error
+                self.displayer_input_queue.put(AOIEvent(
+                    meta_data={"sent_from": "Dispatcher", "type": "status_update"},
+                    content="ready"
+                ))
+            else:
+                logging.warning(f"Unknown event type from Controller: {event_meta['type']}")
+        else:
+            logging.warning(f"Unknown event source: {event_meta['sent_from']}")
 
 def main():
     dispatcher = Dispatcher()
     
-    # Create modules with their respective queues
-    listener = AOIListener(dispatcher.listener_queue, dispatcher.listener_queue)
-    displayer = AOIDisplayer(dispatcher.displayer_queue, dispatcher.displayer_queue)
-    controller = Controller(dispatcher.controller_queue, dispatcher.controller_queue)
+    # Create modules with their respective input and output queues
+    listener = AOIListener(dispatcher.listener_input_queue, dispatcher.listener_output_queue)
+    displayer = AOIDisplayer(dispatcher.displayer_input_queue, dispatcher.displayer_output_queue)
+    controller = Controller(dispatcher.controller_input_queue, dispatcher.controller_output_queue)
     
     dispatcher.register_module(listener)
     dispatcher.register_module(displayer)
