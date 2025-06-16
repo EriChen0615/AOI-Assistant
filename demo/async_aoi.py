@@ -1,13 +1,19 @@
 """
 Async Artificial Open Intelligence (Async-AOI)
 
-A simplified, async version of the AOI system with better monitoring and state management.
-Core components:
-1. AudioListener: Handles audio recording and transcription
-2. AIResponder: Manages LLM interactions
-3. ConsoleUI: Handles user interface and display
-4. EventBus: Manages async event communication between components
+A minimal AI system with async architecture featuring:
+- Audio recording and transcription
+- LLM-powered responses with conversation memory
+- Text-to-speech output
+- Event-driven communication between components
+- Console UI with real-time status updates
+
+Usage: PYTHONPATH=. python demo/async_aoi.py
 """
+
+# Debug logging switch - set to False to disable all logging messages (production mode)
+DEBUG_LOGGING = False
+
 import asyncio
 import logging
 import json
@@ -25,19 +31,47 @@ import queue
 import time
 import threading
 import platform
+import sys
 
-# Set up logging with more detailed format
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%H:%M:%S',
-    handlers=[
-        logging.FileHandler('aoi_async.log'),
-        logging.StreamHandler()
-    ]
-)
+# Set up logging with configurable debug level
+if DEBUG_LOGGING:
+    log_level = logging.DEBUG
+    logging.basicConfig(
+        filename='aoi_async.log',
+        level=log_level,
+        format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    # Create console handler for real-time output
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    console_formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s', datefmt='%H:%M:%S')
+    console_handler.setFormatter(console_formatter)
+    
+    # Get the root logger and add console handler
+    logger = logging.getLogger()
+    logger.addHandler(console_handler)
+    
+    logger.info("Async-AOI starting up...")
+    logger.debug("Debug logging enabled")
+else:
+    # Production mode: disable all logging
+    logging.disable(logging.CRITICAL)
+    logger = logging.getLogger()
+    logger.disabled = True
 
-logger = logging.getLogger('AsyncAOI')
+# Create a silent logger for production mode
+class SilentLogger:
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+    def critical(self, msg): pass
+
+# Use silent logger in production mode
+if not DEBUG_LOGGING:
+    logger = SilentLogger()
 
 class EventType(Enum):
     """Event types in the system"""
@@ -408,6 +442,15 @@ class AIResponder:
         self._logger = logging.getLogger('AIResponder')
         self._queue = event_bus.register_queue('AIResponder')
         self._init_model()
+        self._conversation_history = []  # Store conversation history
+        self._max_history = 10  # Maximum number of turns to keep
+        
+        # Add system message to define AI identity
+        self._system_message = {
+            "role": "system", 
+            "content": "You are AOI (pronounced as ah-o-e), a LLM-driven personal assistant built by Jinghong Chen."
+        }
+        
         event_bus.subscribe('AIResponder', {
             EventType.TRANSCRIPTION
         })
@@ -429,11 +472,26 @@ class AIResponder:
         """Process transcription and generate response"""
         try:
             self._logger.info(f"Generating response for: {event.content[:100]}")
+            
+            # Add user message to history
+            self._conversation_history.append({"role": "user", "content": event.content})
+            
+            # Trim history if it exceeds max length
+            if len(self._conversation_history) > self._max_history:
+                self._conversation_history = self._conversation_history[-self._max_history:]
+            
+            # Prepare messages with system message and conversation history
+            messages = [self._system_message] + self._conversation_history
+            
+            # Generate response using conversation history
             response = self.client.chat.completions.create(
                 model=self.model_name,
-                messages=[{"role": "user", "content": event.content}]
+                messages=messages
             )
             output = response.choices[0].message.content
+            
+            # Add assistant response to history
+            self._conversation_history.append({"role": "assistant", "content": output})
             
             await self.event_bus.publish(Event(
                 type=EventType.LLM_RESPONSE,
@@ -565,7 +623,7 @@ class Speaker:
         
         # Say welcome message only once at startup
         if not self._welcome_said:
-            await self._speak("Hi! This is AOI. I am your personal assistant.")
+            await self._speak("How can I help you today?")
             self._welcome_said = True
 
         while True:
