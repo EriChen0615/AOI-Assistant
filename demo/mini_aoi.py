@@ -12,7 +12,13 @@ Usage: PYTHONPATH=. python demo/async_aoi.py
 """
 
 # Debug logging switch - set to False to disable all logging messages (production mode)
-DEBUG_LOGGING = False
+DEBUG_LOGGING = True
+INPUT_MODE = "keyboard" # Options: keyboard, voice
+OUTPUT_MODE = "console" # Options: console, speaker
+
+OPENAI_API_KEY_FILE = "configs/openai_api_key"
+SYSTEM_MSG_EN = "You are AOI (pronounced as ah-o-e), a LLM-driven personal assistant built by Jinghong Chen. Your response should be oral and brief."
+SYSTEM_MSG_ZH = "你叫小蓝，是一个由大语言模型驱动的个人助理. 你的作者是陈镜鸿。你的回答应该口语化，简洁明了。"
 
 # Language switch - set to "ZH" for Chinese, "EN" for English
 LANGUAGE = "ZH" # Options: ZH, EN 
@@ -24,6 +30,7 @@ import datetime
 import os
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Set
+from abc import abstractmethod
 import openai
 import pyaudio
 import wave
@@ -35,46 +42,38 @@ import time
 import threading
 import platform
 import sys
+import subprocess
 
+
+
+""" ===================== Hyper-Parameters ===================== """
+DEBUG_LOGGING = True
+LANGUAGE = "EN"
+
+""" ===================== Logging ===================== """
 # Set up logging with configurable debug level
-if DEBUG_LOGGING:
-    log_level = logging.DEBUG
-    logging.basicConfig(
-        filename='aoi_async.log',
-        level=log_level,
-        format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
-        datefmt='%H:%M:%S'
-    )
+log_level = logging.DEBUG if DEBUG_LOGGING else logging.ERROR
+logging.basicConfig(
+    filename='aoi_async.log',
+    level=log_level,
+    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
     
-    # Create console handler for real-time output
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s', datefmt='%H:%M:%S')
-    console_handler.setFormatter(console_formatter)
-    
-    # Get the root logger and add console handler
-    logger = logging.getLogger()
-    logger.addHandler(console_handler)
-    
-    logger.info("Async-AOI starting up...")
-    logger.debug("Debug logging enabled")
-else:
-    # Production mode: disable all logging
-    logging.disable(logging.CRITICAL)
-    logger = logging.getLogger()
-    logger.disabled = True
+# Create console handler for real-time output
+console_handler = logging.StreamHandler()
+console_handler.setLevel(log_level)
+console_formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s', datefmt='%H:%M:%S')
+console_handler.setFormatter(console_formatter)
 
-# Create a silent logger for production mode
-class SilentLogger:
-    def debug(self, msg): pass
-    def info(self, msg): pass
-    def warning(self, msg): pass
-    def error(self, msg): pass
-    def critical(self, msg): pass
+# Get the root logger and add console handler
+logger = logging.getLogger()
+logger.addHandler(console_handler)
 
-# Use silent logger in production mode
-if not DEBUG_LOGGING:
-    logger = SilentLogger()
+logger.info("Mini-AOI starting up...")
+logger.debug("Debug logging enabled")
+
+""" ===================== Events ===================== """
 
 class EventType(Enum):
     """Event types in the system"""
@@ -138,6 +137,23 @@ class EventBus:
     async def emit(self, event: Event):
         """Emit an event to all subscribed components"""
         await self.publish(event)
+
+""" ===================== General AOI Module ===================== """
+class AOIModule:
+    def __init__(self, name, event_bus, event_types_to_subscribe):
+        self.name = name
+        self.event_bus = event_bus
+        self._logger = logging.getLogger(self.name)
+        self._queue = self.event_bus.register_queue(self.name)
+        self.event_bus.subscribe(self.name, event_types_to_subscribe)
+
+    @abstractmethod
+    async def run(self):
+        """Main event processing loop"""
+        pass
+
+
+""" ===================== I/O Modules ===================== """
 
 class AudioRecorder:
     """Handles audio recording using PyAudio"""
@@ -250,27 +266,25 @@ class AudioRecorder:
         self.recording = False
         self.frames = []
 
-class AudioListener:
+class AOIAudioListener(AOIModule):
     """Handles audio recording and transcription"""
     def __init__(self, event_bus: EventBus, model_name: str = "whisper-1"):
-        self.event_bus = event_bus
-        self.model_name = model_name
+        event_types_to_subscribe = {
+            EventType.STATUS_UPDATE
+        }
+        super().__init__("AudioListener", event_bus, event_types_to_subscribe)
         self.recorder = AudioRecorder()
+        self.model_name = model_name
         self._keyboard_listener = None
         self._pressed = False
-        self._logger = logging.getLogger('AudioListener')
         self._key_queue = queue.Queue()  # Use synchronous queue for keyboard events
         self._init_model()
-        self._queue = event_bus.register_queue('AudioListener')
         self._loop = None  # Store the event loop
-        event_bus.subscribe('AudioListener', {
-            EventType.STATUS_UPDATE
-        })
 
     def _init_model(self):
         """Initialize OpenAI client"""
         try:
-            with open('configs/openai_api_key', 'r') as f:
+            with open(OPENAI_API_KEY_FILE, 'r') as f:
                 api_key = f.read().strip()
             if not api_key:
                 raise ValueError("API key file is empty")
@@ -437,117 +451,238 @@ class AudioListener:
         self.recorder.cleanup()
         self._logger.info("Audio listener stopped")
 
-class AIResponder:
-    """Handles LLM interactions"""
-    def __init__(self, event_bus: EventBus, model_name: str = "gpt-4.1-nano"):
-        self.event_bus = event_bus
-        self.model_name = model_name
-        self._logger = logging.getLogger('AIResponder')
-        self._queue = event_bus.register_queue('AIResponder')
-        self._init_model()
-        self._conversation_history = []  # Store conversation history
-        self._max_history = 10  # Maximum number of turns to keep
-        
-        # Add system message to define AI identity
-        if LANGUAGE == "EN":
-            self._system_message = {
-                "role": "system", 
-                "content": "You are AOI (pronounced as ah-o-e), a LLM-driven personal assistant built by Jinghong Chen. Your response should be oral and brief."
-            }
-        elif LANGUAGE == "ZH":
-            self._system_message = {
-                "role": "system", 
-                "content": "你叫小蓝，是一个由大语言模型驱动的个人助理. 你的作者是陈镜鸿。你的回答应该口语化，简洁明了。"
-            }
-        
-        event_bus.subscribe('AIResponder', {
-            EventType.TRANSCRIPTION
-        })
+class AOIKeyboardListener(AOIModule):
+    """Handles keyboard text input"""
+    def __init__(self, event_bus: EventBus):
+        event_types_to_subscribe = {
+            EventType.STATUS_UPDATE
+        }
+        super().__init__("KeyboardListener", event_bus, event_types_to_subscribe)
+        self._running = False
+        self._input_queue = queue.Queue()
+        self._input_thread = None
 
-    def _init_model(self):
-        """Initialize OpenAI client"""
+    def _input_loop(self):
+        """Synchronous input loop running in separate thread"""
         try:
-            with open('configs/openai_api_key', 'r') as f:
-                api_key = f.read().strip()
-            if not api_key:
-                raise ValueError("API key file is empty")
-            self.client = openai.OpenAI(api_key=api_key)
-            self._logger.info("OpenAI client initialized")
+            print("\n=== Keyboard Input Mode ===")
+            print("Type your message and press Enter to send.")
+            print("Type 'quit' to exit.\n")
+            
+            while self._running:
+                try:
+                    # Get input from user
+                    user_input = input("User: ").strip()
+                    
+                    if user_input.lower() == 'quit':
+                        self._running = False
+                        break
+                    
+                    if user_input:
+                        # Put input in queue for async processing
+                        self._input_queue.put(user_input)
+                        
+                except EOFError:
+                    break
+                except Exception as e:
+                    self._logger.error(f"Error in keyboard input: {e}")
+                    break
         except Exception as e:
-            self._logger.error(f"Error initializing OpenAI client: {e}")
-            raise
-
-    async def _handle_transcription(self, event: Event):
-        """Process transcription and generate response"""
-        try:
-            self._logger.info(f"Generating response for: {event.content[:100]}")
-            
-            # Add user message to history
-            self._conversation_history.append({"role": "user", "content": event.content})
-            
-            # Trim history if it exceeds max length
-            if len(self._conversation_history) > self._max_history:
-                self._conversation_history = self._conversation_history[-self._max_history:]
-            
-            # Prepare messages with system message and conversation history
-            messages = [self._system_message] + self._conversation_history
-            
-            # Generate response using conversation history
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages
-            )
-            output = response.choices[0].message.content
-            
-            # Add assistant response to history
-            self._conversation_history.append({"role": "assistant", "content": output})
-            
-            await self.event_bus.publish(Event(
-                type=EventType.LLM_RESPONSE,
-                source='AIResponder',
-                content=output
-            ))
-            self._logger.info("Response generated successfully")
-            
-        except Exception as e:
-            self._logger.error(f"Error generating response: {e}")
-            await self.event_bus.publish(Event(
-                type=EventType.ERROR,
-                source='AIResponder',
-                content=str(e)
-            ))
+            self._logger.error(f"Error in input loop: {e}")
 
     async def run(self):
         """Main event processing loop"""
-        self._logger.info("AIResponder started")
+        self._logger.info("KeyboardListener started")
+        self._running = True
+        
+        # Start input thread
+        self._input_thread = threading.Thread(target=self._input_loop, daemon=True)
+        self._input_thread.start()
+        
+        # Process input from queue
+        while self._running:
+            try:
+                # Check for input with timeout
+                try:
+                    user_input = self._input_queue.get_nowait()
+                    
+                    # Emit keyboard input event (treat as transcription for AI processing)
+                    await self.event_bus.publish(Event(
+                        type=EventType.TRANSCRIPTION,
+                        source='KeyboardListener',
+                        content=user_input,
+                        timestamp=time.time()
+                    ))
+                    
+                except queue.Empty:
+                    pass
+                
+                # Yield to other tasks
+                await asyncio.sleep(0.01)
+                
+            except Exception as e:
+                self._logger.error(f"Error in keyboard listener: {e}")
+                await asyncio.sleep(0.1)
+
+    async def stop(self):
+        """Stop the keyboard listener"""
+        self._running = False
+        if self._input_thread:
+            self._input_thread.join(timeout=1.0)
+        self._logger.info("KeyboardListener stopped")
+
+class AOIConsoleUI(AOIModule):
+    """Handles console input/output with separate terminal for AI responses"""
+    def __init__(self, event_bus: EventBus):
+        event_types_to_subscribe = {
+            EventType.RECORDING_START,
+            EventType.RECORDING_STOP,
+            EventType.TRANSCRIPTION,
+            EventType.LLM_RESPONSE,
+            EventType.ERROR,
+            EventType.STATUS_UPDATE,
+            EventType.TTS_START,
+            EventType.TTS_COMPLETE
+        }
+        super().__init__("ConsoleUI", event_bus, event_types_to_subscribe)
+        self._waiting_for_response = False
+        self._last_event_time = 0
+        self._initialized = False
+        self._speaking = False
+        self._response_terminal = None
+        self._response_file = None
+
+    def _open_response_terminal(self):
+        """Open a separate terminal window for AI responses"""
+        try:
+            # Create a temporary file to write responses
+            self._response_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            
+            # Platform-specific terminal opening
+            if platform.system() == 'Darwin':  # macOS
+                # Use Terminal.app with a new window
+                subprocess.Popen([
+                    'osascript', '-e', 
+                    f'tell application "Terminal" to do script "tail -f {self._response_file.name}"'
+                ])
+            elif platform.system() == 'Linux':
+                # Use xterm or gnome-terminal
+                try:
+                    subprocess.Popen(['gnome-terminal', '--', 'tail', '-f', self._response_file.name])
+                except FileNotFoundError:
+                    subprocess.Popen(['xterm', '-e', f'tail -f {self._response_file.name}'])
+            elif platform.system() == 'Windows':
+                # Use cmd with start
+                subprocess.Popen(['cmd', '/c', 'start', 'cmd', '/k', f'type {self._response_file.name}'])
+            
+            self._logger.info(f"Opened response terminal with file: {self._response_file.name}")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to open response terminal: {e}")
+            # Fallback to regular console output
+            self._response_file = None
+
+    def _write_to_response_terminal(self, message: str):
+        """Write message to the response terminal"""
+        try:
+            if self._response_file:
+                timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                self._response_file.write(f"[{timestamp}] {message}\n")
+                self._response_file.flush()
+            else:
+                # Fallback to regular console
+                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
+        except Exception as e:
+            self._logger.error(f"Error writing to response terminal: {e}")
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")  # Fallback
+
+    async def run(self):
+        """Main event processing loop"""
+        self._logger.info("ConsoleUI started")
+        
+        # Open separate terminal for responses
+        self._open_response_terminal()
+        
+        # Print welcome message only once
+        if not self._initialized:
+            print("\n=== Welcome to Async-AOI ===")
+            print("A minimal AI system that listens and responds to your voice.")
+            print("Press and hold SPACE to start recording, release to stop.")
+            print("AI responses will appear in a separate terminal window.")
+            print("Press Ctrl+C to exit.\n")
+            self._initialized = True
+
         while True:
             try:
                 event = await self._queue.get()
-                if event.type == EventType.TRANSCRIPTION:
-                    await self._handle_transcription(event)
+                await self._handle_event(event)
             except Exception as e:
-                self._logger.error(f"Error in AIResponder: {e}")
+                self._logger.error(f"Error in ConsoleUI: {e}")
 
-class Speaker:
+    async def _handle_event(self, event: Event):
+        """Process and display events"""
+        current_time = event.timestamp
+        if current_time - self._last_event_time < 0.1:
+            return
+        self._last_event_time = current_time
+
+        if event.type == EventType.RECORDING_START:
+            self._write_to_response_terminal("Recording... Release space to stop")
+            self._waiting_for_response = False
+            self._speaking = False
+        elif event.type == EventType.RECORDING_STOP:
+            self._write_to_response_terminal("Transcribing...")
+            self._waiting_for_response = True
+            self._speaking = False
+        elif event.type == EventType.TRANSCRIPTION:
+            self._write_to_response_terminal(f"You said: {event.content}")
+        elif event.type == EventType.LLM_RESPONSE:
+            self._write_to_response_terminal(f"AI: {event.content}")
+            self._waiting_for_response = True
+        elif event.type == EventType.ERROR:
+            self._write_to_response_terminal(f"Error: {event.content}")
+            self._waiting_for_response = True
+        elif event.type == EventType.STATUS_UPDATE:
+            if event.content == "ready":
+                self._waiting_for_response = False
+                self._speaking = False
+                self._write_to_response_terminal("Press space to start speaking")
+        elif event.type == EventType.TTS_START:
+            self._speaking = True
+            self._write_to_response_terminal("Speaking...")
+        elif event.type == EventType.TTS_COMPLETE:
+            self._speaking = False
+            if not self._waiting_for_response:
+                self._write_to_response_terminal("Press space to start speaking")
+
+    async def stop(self):
+        """Stop the console UI and cleanup"""
+        if self._response_file:
+            try:
+                self._response_file.close()
+                os.unlink(self._response_file.name)
+            except Exception as e:
+                self._logger.error(f"Error cleaning up response file: {e}")
+        self._logger.info("ConsoleUI stopped")
+
+class AOISpeaker(AOIModule):
     """Handles text-to-speech using OpenAI's TTS model"""
     def __init__(self, event_bus: EventBus, model_name: str = "tts-1"):
-        self.event_bus = event_bus
-        self.model_name = model_name
-        self._logger = logging.getLogger('Speaker')
-        self._queue = event_bus.register_queue('Speaker')
-        self._init_model()
-        self._welcome_said = False
-        self._speaking = False
-        event_bus.subscribe('Speaker', {
+        event_types_to_subscribe = {
             EventType.LLM_RESPONSE,
             EventType.ERROR,
             EventType.STATUS_UPDATE
-        })
+        }
+        super().__init__("Speaker", event_bus, event_types_to_subscribe)
+        self.model_name = model_name
+        self._init_model()
+        self._welcome_said = False
+        self._speaking = False
 
     def _init_model(self):
         """Initialize OpenAI client"""
         try:
-            with open('configs/openai_api_key', 'r') as f:
+            with open(OPENAI_API_KEY_FILE, 'r') as f:
                 api_key = f.read().strip()
             if not api_key:
                 raise ValueError("API key file is empty")
@@ -648,108 +783,135 @@ class Speaker:
             except Exception as e:
                 self._logger.error(f"Error in Speaker: {e}")
 
-class ConsoleUI:
-    """Handles console input/output"""
-    def __init__(self, event_bus: EventBus):
-        self.event_bus = event_bus
-        self._logger = logging.getLogger('ConsoleUI')
-        self._queue = event_bus.register_queue('ConsoleUI')
-        self._waiting_for_response = False
-        self._last_event_time = 0
-        self._initialized = False
-        self._speaking = False
-        event_bus.subscribe('ConsoleUI', {
-            EventType.RECORDING_START,
-            EventType.RECORDING_STOP,
-            EventType.TRANSCRIPTION,
-            EventType.LLM_RESPONSE,
-            EventType.ERROR,
-            EventType.STATUS_UPDATE,
-            EventType.TTS_START,
-            EventType.TTS_COMPLETE
-        })
+""" ===================== AICore ===================== """
+class AOICore(AOIModule):
+    """Handles LLM interactions"""
+    def __init__(self, event_bus: EventBus, model_name: str = "gpt-4.1-nano"):
+        event_types_to_subscribe = {
+            EventType.TRANSCRIPTION
+        }
+        super().__init__("AOICore", event_bus, event_types_to_subscribe)
+        self.model_name = model_name
+        self._init_model()
+        self._conversation_history = []  # Store conversation history
+        self._max_history = 10  # Maximum number of turns to keep
+        
+        # Add system message to define AI identity
+        if LANGUAGE == "EN":
+            self._system_message = {
+                "role": "system", 
+                "content": SYSTEM_MSG_EN
+            }
+        elif LANGUAGE == "ZH":
+            self._system_message = {
+                "role": "system", 
+                "content": SYSTEM_MSG_ZH
+            }
+        
+    def _init_model(self):
+        """Initialize OpenAI client"""
+        try:
+            with open('configs/openai_api_key', 'r') as f:
+                api_key = f.read().strip()
+            if not api_key:
+                raise ValueError("API key file is empty")
+            self.client = openai.OpenAI(api_key=api_key)
+            self._logger.info("OpenAI client initialized")
+        except Exception as e:
+            self._logger.error(f"Error initializing OpenAI client: {e}")
+            raise
+
+    async def _handle_transcription(self, event: Event):
+        """Process transcription and generate response"""
+        try:
+            self._logger.info(f"Generating response for: {event.content[:100]}")
+            
+            # Add user message to history
+            self._conversation_history.append({"role": "user", "content": event.content})
+            
+            # Trim history if it exceeds max length
+            if len(self._conversation_history) > self._max_history:
+                self._conversation_history = self._conversation_history[-self._max_history:]
+            
+            # Prepare messages with system message and conversation history
+            messages = [self._system_message] + self._conversation_history
+            
+            # Generate response using conversation history
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages
+            )
+            output = response.choices[0].message.content
+            
+            # Add assistant response to history
+            self._conversation_history.append({"role": "assistant", "content": output})
+            
+            await self.event_bus.publish(Event(
+                type=EventType.LLM_RESPONSE,
+                source='AOICore',
+                content=output
+            ))
+            self._logger.info("Response generated successfully")
+            
+        except Exception as e:
+            self._logger.error(f"Error generating response: {e}")
+            await self.event_bus.publish(Event(
+                type=EventType.ERROR,
+                source='AOICore',
+                content=str(e)
+            ))
 
     async def run(self):
         """Main event processing loop"""
-        self._logger.info("ConsoleUI started")
-        
-        # Print welcome message only once
-        if not self._initialized:
-            print("\n=== Welcome to Async-AOI ===")
-            print("A minimal AI system that listens and responds to your voice.")
-            print("Press and hold SPACE to start recording, release to stop.")
-            print("Press Ctrl+C to exit.\n")
-            self._initialized = True
-            # Don't print "Press space" here, wait for ready status
-
+        self._logger.info("AOICore started")
         while True:
             try:
                 event = await self._queue.get()
-                await self._handle_event(event)
+                if event.type == EventType.TRANSCRIPTION:
+                    await self._handle_transcription(event)
             except Exception as e:
-                self._logger.error(f"Error in ConsoleUI: {e}")
+                self._logger.error(f"Error in AOICore: {e}")
 
-    async def _handle_event(self, event: Event):
-        """Process and display events"""
-        current_time = event.timestamp
-        if current_time - self._last_event_time < 0.1:
-            return
-        self._last_event_time = current_time
 
-        if event.type == EventType.RECORDING_START:
-            print("\rRecording... Release space to stop", end="", flush=True)
-            self._waiting_for_response = False
-            self._speaking = False
-        elif event.type == EventType.RECORDING_STOP:
-            print("\rTranscribing...", end="", flush=True)
-            self._waiting_for_response = True
-            self._speaking = False
-        elif event.type == EventType.TRANSCRIPTION:
-            print(f"\nYou said: {event.content}")
-        elif event.type == EventType.LLM_RESPONSE:
-            print(f"\nAI: {event.content}")
-            self._waiting_for_response = True
-        elif event.type == EventType.ERROR:
-            print(f"\nError: {event.content}")
-            self._waiting_for_response = True
-        elif event.type == EventType.STATUS_UPDATE:
-            if event.content == "ready":
-                self._waiting_for_response = False
-                self._speaking = False
-                print("\rPress space to start speaking", end="", flush=True)
-        elif event.type == EventType.TTS_START:
-            self._speaking = True
-            print("\rSpeaking...", end="", flush=True)
-        elif event.type == EventType.TTS_COMPLETE:
-            self._speaking = False
-            if not self._waiting_for_response:
-                print("\rPress space to start speaking", end="", flush=True)
+
+""""===================== Main ===================== """
 
 async def main():
     """Main entry point"""
     try:
         # Initialize components
         event_bus = EventBus()
-        audio_listener = AudioListener(event_bus)
-        ai_responder = AIResponder(event_bus)
-        speaker = Speaker(event_bus)
-        console_ui = ConsoleUI(event_bus)
+        ai_responder = AOICore(event_bus)
+        console_ui = AOIConsoleUI(event_bus)
+        keyboard_listener = AOIKeyboardListener(event_bus)
 
         # Start components
-        await audio_listener.start()
         responder_task = asyncio.create_task(ai_responder.run())
-        speaker_task = asyncio.create_task(speaker.run())
         ui_task = asyncio.create_task(console_ui.run())
+        keyboard_task = asyncio.create_task(keyboard_listener.run())
+
+        tasks_to_gather = [responder_task, ui_task, keyboard_task]
+
+        if INPUT_MODE == "voice":
+            audio_listener = AOIAudioListener(event_bus)
+            await audio_listener.start()
+        
+        if OUTPUT_MODE == "speaker":
+            speaker = AOISpeaker(event_bus)
+            speaker_task = asyncio.create_task(speaker.run())
+            tasks_to_gather.append(speaker_task)
 
         # Wait for tasks
-        await asyncio.gather(responder_task, speaker_task, ui_task)
+        await asyncio.gather(*tasks_to_gather)
 
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:
-        await audio_listener.stop()
+        await keyboard_listener.stop()
+        if INPUT_MODE == "voice":
+            await audio_listener.stop()
 
 if __name__ == "__main__":
     try:
