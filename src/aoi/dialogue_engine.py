@@ -21,100 +21,195 @@ from datetime import datetime
 """================ HYPER-PARAMETERS / PROMPTS ==============="""
 
 WORKFLOW_SELECTION_PROMPT = ()
+
 SUPPORTED_OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo-0125", "gpt-4.1-nano"]
 SUPPORTED_QWEN_MODELS = ["Qwen/Qwen2.5-3B-Instruct"]
 
 EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]"]
-DOMAIN_PREDICTION_SYSTEM_MESSAGE = (
-    "You are a task-oriented assistant named AOI (Assistive Open Intelligence) built by Jinghong Chen. Your response should be oral and brief."
-    "Your role is to determine which domain the user is seeking information about or attempting to make a booking in during each turn of the conversation. "
-    "Select the most relevant domain from the following options: [wiki], [news]. "
-    "Select [wiki] for queries about knowledge."
-    "Select [news] for queries on recent events."
-    "If the user's inquiry does not align with a specific domain, use: [general]. "
-)
+
+# Locale-specific prompts
+PROMPTS = {
+    "EN": {
+        "domain_prediction_system_message": (
+            "You are a task-oriented assistant named AOI (Assistive Open Intelligence) built by Jinghong Chen. Your response should be oral and brief. "
+            "Your role is to determine which domain the user is seeking information about or attempting to make a booking in during each turn of the conversation. "
+            "Select the most relevant domain from the following options: [wiki], [news]. "
+            "Select [wiki] for queries about knowledge."
+            "Select [news] for queries on recent events."
+            "If the user's inquiry does not align with a specific domain, use: [general]. "
+        ),
+        "tod_instruction": "You are a task-oriented assistant. You can use the given functions to fetch further data to help the users.",
+        "tod_notes": [
+            "Don't make assumptions about what values to plug into functions. Ask for clarification if a user request is ambiguous.",
+            "Use only the argument values explicitly provided or confirmed by the user instead of the assistant. Don't add or guess argument values.",
+            "Ensure the accuracy of arguments when calling functions to effectively obtain information of entities requested by the user.",
+        ],
+        "response_generation_system_message": (
+            "Please generate a helpful response to the user based on the dialogue history and returned values from the functions if present."
+        )
+    },
+    "ZH": {
+        "domain_prediction_system_message": (
+            "你是小蓝，一个由陈镜鸿构建的任务导向助手。你的回答应该口语化且简洁。 "
+            "你的角色是确定用户在对话的每个回合中寻求信息或尝试预订的领域。 "
+            "从以下选项中选择最相关的领域：[wiki]，[news]。 "
+            "选择[wiki]用于知识查询。"
+            "选择[news]用于最近事件的查询。"
+            "如果用户的询问与特定领域不符，请使用：[general]。 "
+        ),
+        "tod_instruction": "你是一个任务导向的助手。你可以使用给定的函数来获取更多数据来帮助用户。",
+        "tod_notes": [
+            "不要对函数参数值做假设。如果用户请求不明确，请要求澄清。",
+            "只使用用户明确提供或确认的参数值，而不是助手的假设。不要添加或猜测参数值。",
+            "确保调用函数时参数的准确性，以有效获取用户请求的实体信息。",
+        ],
+        "response_generation_system_message": (
+            "请根据对话历史和函数返回值（如果存在）为用户生成有用的回答。"
+        )
+    }
+}
+
 domain_prefix = "<domain>"
 domain_suffix = "</domain>"
-DOMAIN_PREDICTION_EXAMPLES = [
-    (
-        "\nuser: hi, can you tell me when was CUDA created?"
-        "\nassistant: " + domain_prefix + "[wiki]" + domain_suffix
-    ),
-    (
-        "\nuser: what are some recent corporate events by NVIDIA?"
-        "\nassistant: " + domain_prefix + "[news]" + domain_suffix
-    ),
-    (
-        "\nuser: okay, thank you . have a good day !"
-        "\nassistant: " + domain_prefix + "[general]" + domain_suffix
-    ),
-]
+
+# Locale-specific examples
+DOMAIN_PREDICTION_EXAMPLES = {
+    "EN": [
+        (
+            "\nuser: hi, can you tell me when was CUDA created?"
+            "\nassistant: " + domain_prefix + "[wiki]" + domain_suffix
+        ),
+        (
+            "\nuser: what are some recent corporate events by NVIDIA?"
+            "\nassistant: " + domain_prefix + "[news]" + domain_suffix
+        ),
+        (
+            "\nuser: okay, thank you . have a good day !"
+            "\nassistant: " + domain_prefix + "[general]" + domain_suffix
+        ),
+    ],
+    "ZH": [
+        (
+            "\nuser: 你好，能告诉我CUDA是什么时候创建的吗？"
+            "\nassistant: " + domain_prefix + "[wiki]" + domain_suffix
+        ),
+        (
+            "\nuser: 英伟达最近有什么企业活动？"
+            "\nassistant: " + domain_prefix + "[news]" + domain_suffix
+        ),
+        (
+            "\nuser: 好的，谢谢，祝你有美好的一天！"
+            "\nassistant: " + domain_prefix + "[general]" + domain_suffix
+        ),
+    ]
+}
+
 DOMAIN_TO_FUNCTION_MAPPING =  {
     "[wiki]": ["search_wiki"],
     "[news]": ["search_news"],
 }
 
 from aoi.executable_functions import do_search_wiki, do_search_news
-FUNCTION_SCHEMA = {
-    "search_wiki": {
-        "type": "function",
-        "name": "search_wiki",
-        "function": {
+
+# Locale-specific function schemas
+FUNCTION_SCHEMAS = {
+    "EN": {
+        "search_wiki": {
+            "type": "function",
             "name": "search_wiki",
-            "description": "Search wikipedia for information",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The query to search wikipedia for"
+            "function": {
+                "name": "search_wiki",
+                "description": "Search wikipedia for information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search wikipedia for"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "The number of results to return"
+                        }
                     },
-                    "num_results": {
-                        "type": "integer",
-                        "description": "The number of results to return"
-                    }
-                },
-                "required": ["query"]
-            }
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_wiki
         },
-        "executable_fn": do_search_wiki
+        "search_news": {
+            "type": "function",
+            "name": "search_news", 
+            "function": {
+                "name": "search_news", 
+                "description": "Search news for information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search news for"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "The number of results to return"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_news
+        }
     },
-    "search_news": {
-        "type": "function",
-        "name": "search_news",
-        "function": {
-            "name": "search_news",
-            "description": "Search news for information",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The query to search news for"
+    "ZH": {
+        "search_wiki": {
+            "type": "function",
+            "name": "search_wiki",
+            "function": {
+                "name": "search_wiki",
+                "description": "搜索维基百科获取信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "要搜索维基百科的查询"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "要返回的结果数量"
+                        }
                     },
-                    "num_results": {
-                        "type": "integer",
-                        "description": "The number of results to return"
-                    }
-                },
-                "required": ["query"]
-            }
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_wiki
         },
-        "executable_fn": do_search_news
+        "search_news": {
+            "type": "function",
+            "name": "search_news", 
+            "function": {
+                "name": "search_news", 
+                "description": "搜索新闻获取信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "要搜索新闻的查询"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "要返回的结果数量"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_news
+        }
     }
 }
-
-TOD_INSTRUCTION = "You are a task-oriented assistant. You can use the given functions to fetch further data to help the users."
-
-TOD_NOTES = [
-    "Don't make assumptions about what values to plug into functions. Ask for clarification if a user request is ambiguous.",
-    "Use only the argument values explicitly provided or confirmed by the user instead of the assistant. Don't add or guess argument values.",
-    "Ensure the accuracy of arguments when calling functions to effectively obtain information of entities requested by the user.",
-]
-
-RESPONSE_GENERATION_SYSTEM_MESSAGE = (
-    "Please generate a helpful response to the user based on the dialogue history and returned values from the functions if present."
-)
 
 """======================= Helper Functions ===================="""
 def log_to_file(func):
@@ -304,9 +399,10 @@ def make_response_generation_messages(
     fnc_arguments,
     fnc_results,
     all_turns,
+    locale="EN"
 ):
     messages = []
-    system_message = RESPONSE_GENERATION_SYSTEM_MESSAGE
+    system_message = PROMPTS[locale]["response_generation_system_message"]
     if fnc_name is not None:
         system_message += f"\nFunction: {fnc_name}\nArguments: {fnc_arguments}\nReturned Results:\n {fnc_results}\n"
     messages.append({"role": "system", "content": system_message})
@@ -316,13 +412,19 @@ def make_response_generation_messages(
 """======================= AOI Dialogue Engine ===================="""
 
 class AOIDialogueEngine:
-    def __init__(self, model_name, save_dir, api_key_file=None):
+    def __init__(self, model_name, save_dir, api_key_file=None, locale="EN"):
         self.model_name = model_name
         self.save_dir = save_dir
         self._session_save_fpath = os.path.join(save_dir, 'all_sessions.jsonl')
         self._turns_save_fpath = os.path.join(save_dir, 'all_turns.jsonl')
         self._memory_save_fpath = os.path.join(save_dir, 'memories.jsonl')
         self._api_key_file = api_key_file
+        self.locale = locale.upper() if locale else "EN"
+        
+        # Validate locale
+        if self.locale not in PROMPTS:
+            raise ValueError(f"Unsupported locale: {locale}. Supported locales: {list(PROMPTS.keys())}")
+        
         self._init_session_states()
         self._init_model()
     
@@ -422,8 +524,8 @@ class AOIDialogueEngine:
 
         """Step 1: Domain Prediction (DP)"""
         messages_for_dp = make_domain_prediction_messages(
-            DOMAIN_PREDICTION_SYSTEM_MESSAGE,
-            DOMAIN_PREDICTION_EXAMPLES,
+            PROMPTS[self.locale]["domain_prediction_system_message"],
+            DOMAIN_PREDICTION_EXAMPLES[self.locale],
             self._all_turns
         )
 
@@ -437,15 +539,15 @@ class AOIDialogueEngine:
         )
         print(f"DEBUG: Responses for DP: {responses_for_dp}")
         turn_domain = parse_response_to_predicted_domain(responses_for_dp[0]['content'])
-        candidate_functions, current_function = get_functions_in_domain(turn_domain, DOMAIN_TO_FUNCTION_MAPPING, FUNCTION_SCHEMA)
+        candidate_functions, current_function = get_functions_in_domain(turn_domain, DOMAIN_TO_FUNCTION_MAPPING, FUNCTION_SCHEMAS[self.locale])
         fnc_name, fnc_arguments, fnc_results = None, None, None
         self._session_history.append({"type": "domain_prediction", "content": {"turn_domain": turn_domain, "candidate_functions": candidate_functions, "current_function": current_function}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
 
         if candidate_functions is not None:
             """Step 2: Dialogue State Tracking (DST)"""
             messages_for_dst = make_dialogue_state_tracking_messages(
-                TOD_INSTRUCTION,
-                TOD_NOTES,
+                PROMPTS[self.locale]["tod_instruction"],
+                PROMPTS[self.locale]["tod_notes"],
                 self._all_turns
             )
 
@@ -469,8 +571,8 @@ class AOIDialogueEngine:
             self._session_history.append({"type": "function_argument_filling", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
 
             """Step 3: Function Execution"""
-            if check_executable(fnc_name, fnc_arguments, FUNCTION_SCHEMA):
-                fnc_results = execute_function(fnc_name, fnc_arguments, FUNCTION_SCHEMA)
+            if check_executable(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale]):
+                fnc_results = execute_function(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale])
                 self._session_history.append({"type": "function_execution", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments, "fnc_results": fnc_results}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
             
         """Step 4: Generate Response"""
@@ -479,6 +581,7 @@ class AOIDialogueEngine:
             fnc_arguments,
             fnc_results,
             self._all_turns,
+            locale=self.locale
         )
         self._session_history.append({"type": "response_generation", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments, "fnc_results": fnc_results}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
 

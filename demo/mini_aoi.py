@@ -51,7 +51,7 @@ from aoi.dialogue_engine import AOIDialogueEngine
 
 """ ===================== Hyper-Parameters ===================== """
 DEBUG_LOGGING = True
-LANGUAGE = "EN"
+LANGUAGE = "ZH"
 
 """ ===================== Logging ===================== """
 # Set up logging with configurable debug level
@@ -806,7 +806,8 @@ class AOICore(AOIModule):
             self.dialogue_engine = AOIDialogueEngine(
                 model_name=self.model_name,
                 save_dir=save_dir,
-                api_key_file=OPENAI_API_KEY_FILE
+                api_key_file=OPENAI_API_KEY_FILE,
+                locale=LANGUAGE
             )
             self.dialogue_engine.start_new_session()
             self._logger.info("Dialogue engine initialized")
