@@ -25,7 +25,7 @@ WORKFLOW_SELECTION_PROMPT = ()
 SUPPORTED_OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo-0125", "gpt-4.1-nano"]
 SUPPORTED_QWEN_MODELS = ["Qwen/Qwen2.5-3B-Instruct"]
 
-EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]"]
+EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]", "[cook]"]
 
 # Locale-specific prompts
 PROMPTS = {
@@ -33,9 +33,10 @@ PROMPTS = {
         "domain_prediction_system_message": (
             "You are a task-oriented assistant named AOI (Assistive Open Intelligence) built by Jinghong Chen. Your response should be oral and brief. "
             "Your role is to determine which domain the user is seeking information about or attempting to make a booking in during each turn of the conversation. "
-            "Select the most relevant domain from the following options: [wiki], [news]. "
+            "Select the most relevant domain from the following options: [wiki], [news], [cook]. "
             "Select [wiki] for queries about knowledge."
             "Select [news] for queries on recent events."
+            "Select [cook] for queries about recipes and cooking."
             "If the user's inquiry does not align with a specific domain, use: [general]. "
         ),
         "tod_instruction": "You are a task-oriented assistant. You can use the given functions to fetch further data to help the users.",
@@ -52,9 +53,10 @@ PROMPTS = {
         "domain_prediction_system_message": (
             "你是小蓝，一个由陈镜鸿构建的任务导向助手。你的回答应该口语化且简洁。 "
             "你的角色是确定用户在对话的每个回合中寻求信息或尝试预订的领域。 "
-            "从以下选项中选择最相关的领域：[wiki]，[news]。 "
+            "从以下选项中选择最相关的领域：[wiki]，[news]，[cook]。 "
             "选择[wiki]用于知识查询。"
             "选择[news]用于最近事件的查询。"
+            "选择[cook]用于菜谱和烹饪查询。"
             "如果用户的询问与特定领域不符，请使用：[general]。 "
         ),
         "tod_instruction": "你是一个任务导向的助手。你可以使用给定的函数来获取更多数据来帮助用户。",
@@ -98,6 +100,10 @@ DOMAIN_PREDICTION_EXAMPLES = {
             "\nassistant: " + domain_prefix + "[news]" + domain_suffix
         ),
         (
+            "\nuser: 怎么做蛋炒饭？"
+            "\nassistant: " + domain_prefix + "[cook]" + domain_suffix
+        ),
+        (
             "\nuser: 好的，谢谢，祝你有美好的一天！"
             "\nassistant: " + domain_prefix + "[general]" + domain_suffix
         ),
@@ -107,9 +113,10 @@ DOMAIN_PREDICTION_EXAMPLES = {
 DOMAIN_TO_FUNCTION_MAPPING =  {
     "[wiki]": ["search_wiki"],
     "[news]": ["search_news"],
+    "[cook]": ["search_cookbook"],
 }
 
-from aoi.executable_functions import do_search_wiki, do_search_news
+from aoi.executable_functions import do_search_wiki, do_search_news, do_search_cookbook
 
 # Locale-specific function schemas
 FUNCTION_SCHEMAS = {
@@ -159,6 +166,29 @@ FUNCTION_SCHEMAS = {
                 }
             },
             "executable_fn": do_search_news
+        },
+        "search_cookbook": {
+            "type": "function",
+            "name": "search_cookbook",
+            "function": {
+                "name": "search_cookbook",
+                "description": "Search for recipes and cooking instructions",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The recipe or cooking query to search for"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "The number of results to return"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_cookbook
         }
     },
     "ZH": {
@@ -207,6 +237,29 @@ FUNCTION_SCHEMAS = {
                 }
             },
             "executable_fn": do_search_news
+        },
+        "search_cookbook": {
+            "type": "function",
+            "name": "search_cookbook",
+            "function": {
+                "name": "search_cookbook",
+                "description": "搜索菜谱和烹饪方法",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "要搜索的菜谱或烹饪查询"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "要返回的结果数量"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_cookbook
         }
     }
 }
@@ -311,6 +364,7 @@ def parse_response_to_predicted_domain(response):
     for d in [
         "wiki",
         "news",
+        "cook",
         "general",
     ]:
         if d in response:
@@ -390,7 +444,11 @@ def check_executable(fnc_name, fnc_arguments, function_schema):
     return True
 
 @log_to_file
-def execute_function(fnc_name, fnc_arguments, function_schema):
+def execute_function(fnc_name, fnc_arguments, function_schema, locale="EN"):
+    # Check if the function supports locale parameter
+    if fnc_name == "search_cookbook" and "locale" in function_schema[fnc_name]["executable_fn"].__code__.co_varnames:
+        fnc_arguments["locale"] = locale
+    
     call_results = function_schema[fnc_name]["executable_fn"](**fnc_arguments)
     return call_results
 
@@ -572,7 +630,7 @@ class AOIDialogueEngine:
 
             """Step 3: Function Execution"""
             if check_executable(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale]):
-                fnc_results = execute_function(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale])
+                fnc_results = execute_function(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale], locale=self.locale)
                 self._session_history.append({"type": "function_execution", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments, "fnc_results": fnc_results}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
             
         """Step 4: Generate Response"""

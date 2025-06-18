@@ -47,6 +47,71 @@ def do_search_news(query, num_results=10):
     returned_values = "\n".join([f"Title: {result['title']}\nURL: {result['url']}\nDescription: {result['description']}" for result in results])
     return returned_values
 
+def do_search_cookbook(query, num_results=5, locale="EN"):
+    # Use JD API for recipe search
+    url = "https://way.jd.com/jisuapi/search"
+    params = {
+        "keyword": query,
+        "num": min(num_results, 20),  # API limit is 20
+        "appkey": "da39dce4f8aa52155677ed8cd23a647"
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    results = []
+    if "result" in data and "result" in data["result"] and "list" in data["result"]["result"]:
+        for item in data["result"]["result"]["list"][:num_results]:
+            # Extract ingredients
+            ingredients = []
+            if "material" in item:
+                for material in item["material"]:
+                    ingredients.append(f"{material.get('mname', '')} {material.get('amount', '')}")
+            
+            # Extract cooking steps
+            steps = []
+            if "process" in item:
+                for i, process in enumerate(item["process"], 1):
+                    steps.append(f"{i}. {process.get('pcontent', '')}")
+            
+            # Format the result based on locale
+            if locale == "ZH":
+                recipe_info = f"菜谱: {item.get('name', '')}\n"
+                recipe_info += f"准备时间: {item.get('preparetime', '')}\n"
+                recipe_info += f"烹饪时间: {item.get('cookingtime', '')}\n"
+                recipe_info += f"份量: {item.get('peoplenum', '')}\n"
+                recipe_info += f"标签: {item.get('tag', '')}\n\n"
+                
+                if ingredients:
+                    recipe_info += "食材:\n" + "\n".join(ingredients) + "\n\n"
+                
+                if steps:
+                    recipe_info += "烹饪步骤:\n" + "\n".join(steps) + "\n\n"
+                
+                recipe_info += f"描述: {item.get('content', '')}"
+            else:
+                recipe_info = f"Recipe: {item.get('name', '')}\n"
+                recipe_info += f"Preparation Time: {item.get('preparetime', '')}\n"
+                recipe_info += f"Cooking Time: {item.get('cookingtime', '')}\n"
+                recipe_info += f"Serves: {item.get('peoplenum', '')}\n"
+                recipe_info += f"Tags: {item.get('tag', '')}\n\n"
+                
+                if ingredients:
+                    recipe_info += "Ingredients:\n" + "\n".join(ingredients) + "\n\n"
+                
+                if steps:
+                    recipe_info += "Cooking Steps:\n" + "\n".join(steps) + "\n\n"
+                
+                recipe_info += f"Description: {item.get('content', '')}"
+            
+            results.append({
+                "title": item.get("name", ""),
+                "description": recipe_info,
+                "url": item.get("pic", "")
+            })
+    
+    returned_values = "\n\n---\n\n".join([f"Title: {result['title']}\nURL: {result['url']}\nDescription: {result['description']}" for result in results])
+    return returned_values
+
 def test_search_wiki():
     # Test basic wiki search
     results = do_search_wiki("Python programming language")
@@ -88,6 +153,28 @@ def test_search_news():
     
     print("All news search tests passed!")
 
+def test_search_cookbook():
+    # Test basic cookbook search
+    results = do_search_cookbook("蛋炒饭")
+    assert len(results) > 0
+    print("--------------------------------")
+    print("search Cookbook Results:")
+    print(results)
+    
+    # Test with custom num_results
+    results = do_search_cookbook("红烧肉", num_results=5)
+    assert len(results) <= 5
+    print("--------------------------------")
+    print("search Cookbook Results (limited):")
+    print(results)
+    
+    # Test with empty query
+    results = do_search_cookbook("")
+    assert len(results) == 0
+    
+    print("All cookbook search tests passed!")
+
 if __name__ == "__main__":
     test_search_wiki()
     test_search_news()
+    test_search_cookbook()
