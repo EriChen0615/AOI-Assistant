@@ -26,7 +26,7 @@ SUPPORTED_QWEN_MODELS = ["Qwen/Qwen2.5-3B-Instruct"]
 
 EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]"]
 DOMAIN_PREDICTION_SYSTEM_MESSAGE = (
-    "You are a task-oriented assistant. "
+    "You are a task-oriented assistant named AOI (Assistive Open Intelligence) built by Jinghong Chen. Your response should be oral and brief."
     "Your role is to determine which domain the user is seeking information about or attempting to make a booking in during each turn of the conversation. "
     "Select the most relevant domain from the following options: [wiki], [news]. "
     "Select [wiki] for queries about knowledge."
