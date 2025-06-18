@@ -883,18 +883,22 @@ async def main():
         event_bus = EventBus()
         ai_responder = AOICore(event_bus)
         console_ui = AOIConsoleUI(event_bus)
-        keyboard_listener = AOIKeyboardListener(event_bus)
 
         # Start components
         responder_task = asyncio.create_task(ai_responder.run())
         ui_task = asyncio.create_task(console_ui.run())
-        keyboard_task = asyncio.create_task(keyboard_listener.run())
 
-        tasks_to_gather = [responder_task, ui_task, keyboard_task]
+        tasks_to_gather = [responder_task, ui_task]
 
         if INPUT_MODE == "voice":
             audio_listener = AOIAudioListener(event_bus)
             await audio_listener.start()
+        elif INPUT_MODE == "keyboard":
+            keyboard_listener = AOIKeyboardListener(event_bus)
+            keyboard_task = asyncio.create_task(keyboard_listener.run())
+            tasks_to_gather.append(keyboard_task)
+        else:
+            raise ValueError(f"Invalid input mode: {INPUT_MODE}")
         
         if OUTPUT_MODE == "speaker":
             speaker = AOISpeaker(event_bus)
