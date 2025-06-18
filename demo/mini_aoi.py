@@ -21,7 +21,7 @@ SYSTEM_MSG_EN = "You are AOI (pronounced as ah-o-e), a LLM-driven personal assis
 SYSTEM_MSG_ZH = "你叫小蓝，是一个由大语言模型驱动的个人助理. 你的作者是陈镜鸿。你的回答应该口语化，简洁明了。"
 
 # Language switch - set to "ZH" for Chinese, "EN" for English
-LANGUAGE = "ZH" # Options: ZH, EN 
+LANGUAGE = "EN" # Options: ZH, EN
 
 import asyncio
 import logging
@@ -43,8 +43,11 @@ import threading
 import platform
 import sys
 import subprocess
+import requests
 
-
+# Import the dialogue engine
+sys.path.append('src')
+from aoi.dialogue_engine import AOIDialogueEngine
 
 """ ===================== Hyper-Parameters ===================== """
 DEBUG_LOGGING = True
@@ -785,71 +788,44 @@ class AOISpeaker(AOIModule):
 
 """ ===================== AICore ===================== """
 class AOICore(AOIModule):
-    """Handles LLM interactions"""
-    def __init__(self, event_bus: EventBus, model_name: str = "gpt-4.1-nano"):
+    """Handles LLM interactions using dialogue engine"""
+    def __init__(self, event_bus: EventBus, model_name: str = "gpt-4o-mini"):
         event_types_to_subscribe = {
             EventType.TRANSCRIPTION
         }
         super().__init__("AOICore", event_bus, event_types_to_subscribe)
         self.model_name = model_name
         self._init_model()
-        self._conversation_history = []  # Store conversation history
-        self._max_history = 10  # Maximum number of turns to keep
-        
-        # Add system message to define AI identity
-        if LANGUAGE == "EN":
-            self._system_message = {
-                "role": "system", 
-                "content": SYSTEM_MSG_EN
-            }
-        elif LANGUAGE == "ZH":
-            self._system_message = {
-                "role": "system", 
-                "content": SYSTEM_MSG_ZH
-            }
         
     def _init_model(self):
-        """Initialize OpenAI client"""
+        """Initialize dialogue engine"""
         try:
-            with open('configs/openai_api_key', 'r') as f:
-                api_key = f.read().strip()
-            if not api_key:
-                raise ValueError("API key file is empty")
-            self.client = openai.OpenAI(api_key=api_key)
-            self._logger.info("OpenAI client initialized")
+            # Initialize dialogue engine
+            save_dir = "outputs/0618/dev1"
+            os.makedirs(save_dir, exist_ok=True)
+            self.dialogue_engine = AOIDialogueEngine(
+                model_name=self.model_name,
+                save_dir=save_dir,
+                api_key_file=OPENAI_API_KEY_FILE
+            )
+            self.dialogue_engine.start_new_session()
+            self._logger.info("Dialogue engine initialized")
         except Exception as e:
-            self._logger.error(f"Error initializing OpenAI client: {e}")
+            self._logger.error(f"Error initializing dialogue engine: {e}")
             raise
 
     async def _handle_transcription(self, event: Event):
-        """Process transcription and generate response"""
+        """Process transcription and generate response using dialogue engine"""
         try:
             self._logger.info(f"Generating response for: {event.content[:100]}")
             
-            # Add user message to history
-            self._conversation_history.append({"role": "user", "content": event.content})
-            
-            # Trim history if it exceeds max length
-            if len(self._conversation_history) > self._max_history:
-                self._conversation_history = self._conversation_history[-self._max_history:]
-            
-            # Prepare messages with system message and conversation history
-            messages = [self._system_message] + self._conversation_history
-            
-            # Generate response using conversation history
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages
-            )
-            output = response.choices[0].message.content
-            
-            # Add assistant response to history
-            self._conversation_history.append({"role": "assistant", "content": output})
+            # Use dialogue engine to process the turn
+            response = self.dialogue_engine.run_turn(event.content)
             
             await self.event_bus.publish(Event(
                 type=EventType.LLM_RESPONSE,
                 source='AOICore',
-                content=output
+                content=response
             ))
             self._logger.info("Response generated successfully")
             
@@ -871,8 +847,6 @@ class AOICore(AOIModule):
                     await self._handle_transcription(event)
             except Exception as e:
                 self._logger.error(f"Error in AOICore: {e}")
-
-
 
 """"===================== Main ===================== """
 
