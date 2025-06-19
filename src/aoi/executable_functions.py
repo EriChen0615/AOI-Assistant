@@ -53,13 +53,21 @@ def do_search_cookbook(query, num_results=5, locale="EN"):
     params = {
         "keyword": query,
         "num": min(num_results, 20),  # API limit is 20
-        "appkey": "da39dce4f8aa52155677ed8cd23a647"
+        "appkey": "da39dce4f8aa52155677ed8cd23a6470"
     }
+    
+    print(f"DEBUG: Making API call to {url}")
+    print(f"DEBUG: Parameters: {params}")
+    
     response = requests.get(url, params=params)
+    print(f"DEBUG: Response status code: {response.status_code}")
+    
     data = response.json()
+    print(f"DEBUG: API response: {data}")
     
     results = []
     if "result" in data and "result" in data["result"] and "list" in data["result"]["result"]:
+        print(f"DEBUG: Found recipe list with {len(data['result']['result']['list'])} items")
         for item in data["result"]["result"]["list"][:num_results]:
             # Extract ingredients
             ingredients = []
@@ -108,8 +116,16 @@ def do_search_cookbook(query, num_results=5, locale="EN"):
                 "description": recipe_info,
                 "url": item.get("pic", "")
             })
+    else:
+        print(f"DEBUG: No recipe list found in response")
+        print(f"DEBUG: Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+        if "result" in data:
+            print(f"DEBUG: Result keys: {list(data['result'].keys()) if isinstance(data['result'], dict) else 'Not a dict'}")
+    
+    print(f"DEBUG: Processed {len(results)} results")
     
     returned_values = "\n\n---\n\n".join([f"Title: {result['title']}\nURL: {result['url']}\nDescription: {result['description']}" for result in results])
+    print(f"DEBUG: Final returned values length: {len(returned_values)}")
     return returned_values
 
 def test_search_wiki():
