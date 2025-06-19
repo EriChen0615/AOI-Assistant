@@ -25,7 +25,7 @@ WORKFLOW_SELECTION_PROMPT = ()
 SUPPORTED_OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo-0125", "gpt-4.1-nano"]
 SUPPORTED_QWEN_MODELS = ["Qwen/Qwen2.5-3B-Instruct"]
 
-EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]", "[cook]"]
+EXPERIMENT_DOMAINS = ["[general]", "[wiki]", "[news]", "[cook]", "[bocha]", "[recall]"]
 
 # Locale-specific prompts
 PROMPTS = {
@@ -37,6 +37,8 @@ PROMPTS = {
             "Select [wiki] for queries about knowledge."
             "Select [news] for queries on recent events."
             "Select [cook] for queries about recipes and cooking."
+            "Select [bocha] for queries about other web search."
+            "Select [recall] for queries about recalling user memories."
             "If the user's inquiry does not align with a specific domain, use: [general]. "
         ),
         "tod_instruction": "You are a task-oriented assistant. You can use the given functions to fetch further data to help the users.",
@@ -47,6 +49,22 @@ PROMPTS = {
         ],
         "response_generation_system_message": (
             "Please generate a helpful response to the user based on the dialogue history and returned values from the functions if present."
+        ),
+
+        "recall_reflection_system_message": (
+            "Your task is to recall a piece of memory of the user from the memory store. The user will provide some hints."
+            "Think about what useful information you need to locate the memory and also what information you can infer from the user utterance."
+            "You should generate a step-by-step plan to retrieve the memory. The plan should contains bullet points in the following structure: \n[Step 1] ...\n, \n[Step 2] ...\n, etc. Each step should be a single line."
+            "A list of available functions is provided below. You can use any of them to retrieve the memory in your plan."
+        ),
+        "recall_act_system_message": (
+            "Your task is to recall a piece of memory of the user from the memory store. "
+            "You should act according to the current step in the plan."
+            "Use only the argument values explicitly provided or confirmed by the user instead of the assistant. Don't add or guess argument values."
+            "Ensure the accuracy of arguments when calling functions to effectively obtain information of entities requested by the user."
+        ),
+        "recall_response_system_message": (
+            "You are a task-oriented assistant. Provided with the retrieved memory, address the user's query directly and succinctly."
         )
     },
     "ZH": {
@@ -87,6 +105,14 @@ DOMAIN_PREDICTION_EXAMPLES = {
             "\nassistant: " + domain_prefix + "[news]" + domain_suffix
         ),
         (
+            "\nuser: what is the weather in Beijing?"
+            "\nassistant: " + domain_prefix + "[bocha]" + domain_suffix
+        ),
+        (
+            "\nuser: what did I browse on the internet yesterday?"
+            "\nassistant: " + domain_prefix + "[recall]" + domain_suffix
+        ),
+        (
             "\nuser: okay, thank you . have a good day !"
             "\nassistant: " + domain_prefix + "[general]" + domain_suffix
         ),
@@ -120,9 +146,10 @@ DOMAIN_TO_FUNCTION_MAPPING =  {
     "[news]": ["search_news"],
     "[cook]": ["search_cookbook"],
     "[bocha]": ["search_bocha"],
+    "[recall]": ["recall_memory"],
 }
 
-from aoi.executable_functions import do_search_wiki, do_search_news, do_search_cookbook, do_search_bocha
+from aoi.executable_functions import do_search_wiki, do_search_news, do_search_cookbook, do_search_bocha, do_recall_memory
 
 # Locale-specific function schemas
 FUNCTION_SCHEMAS = {
@@ -227,6 +254,42 @@ FUNCTION_SCHEMAS = {
                 }
             },
             "executable_fn": do_search_bocha
+        },
+        "recall_memory": {
+            "type": "function",
+            "name": "recall_memory",
+            "function": {
+                "name": "recall_memory",
+                "description": "Recall a piece of memory from the memory store",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search the memory store for"
+                        },
+                        "time_range": {
+                            "type": "string",
+                            "description": "The time range to search the memory store for",
+                            "enum": ["oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit"]
+                        },
+                        "source_type": {
+                            "type": "string",
+                            "description": "The type of the source of the memory",
+                            "enum": ["active", "passive"]
+                        },
+                        "tags": {
+                            "type": "array",
+                            "description": "The tags of the memory",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_recall_memory
         }
     },
     "ZH": {
@@ -436,6 +499,7 @@ def parse_response_to_predicted_domain(response):
         "news",
         "cook",
         "bocha",
+        "recall",
         "general",
     ]:
         if d in response:
@@ -538,6 +602,52 @@ def make_response_generation_messages(
     messages.extend(all_turns)
     return messages
 
+def make_recall_reflection_messages(
+    reflection_system_message,
+    all_turns,
+    locale="EN"
+):
+    recall_fn_names = [fnc_name for fnc_name in DOMAIN_TO_FUNCTION_MAPPING["[recall]"]]
+    available_recall_functions = "\n\n".join([json.dumps(fnc_schema["function"]) for fnc_name, fnc_schema in FUNCTION_SCHEMAS[locale].items() if fnc_name in recall_fn_names])
+    reflection_system_message += f"\nAvailable functions: {available_recall_functions}\n"
+    messages = []
+    messages.append({"role": "system", "content": reflection_system_message})
+    print(f"[DEBUG] Reflection system message: {reflection_system_message}")
+    messages.extend(all_turns)
+    return messages
+
+def make_recall_act_messages(
+    act_system_message,
+    retrieval_step,
+    all_turns,
+    locale="EN"
+):
+    sys_msg = act_system_message
+    sys_msg += f"\n\nCurrent step: {retrieval_step}"
+    messages = []
+    messages.append({"role": "system", "content": sys_msg})
+    messages.extend(all_turns)
+    return messages
+
+def parse_recall_retrieval_plan(response):
+    retrieval_plan = []
+    for line in response.split("\n"):
+        if line.startswith("[Step"):
+            retrieval_plan.append(line)
+    return retrieval_plan
+
+def make_recall_response_generation_messages(
+    recall_response_system_message,
+    retrieved_memory,
+    all_turns,
+    locale="EN"
+):
+    sys_msg = f"{recall_response_system_message}\n\nRetrieved memories:\n{retrieved_memory}"
+    messages = []
+    messages.append({"role": "system", "content": sys_msg})
+    messages.extend(all_turns)
+    return messages
+
 """======================= AOI Dialogue Engine ===================="""
 
 class AOIDialogueEngine:
@@ -549,6 +659,7 @@ class AOIDialogueEngine:
         self._memory_save_fpath = os.path.join(save_dir, 'memories.jsonl')
         self._api_key_file = api_key_file
         self.locale = locale.upper() if locale else "EN"
+        print(f"DEBUG: Locale: {self.locale}")
         
         # Validate locale
         if self.locale not in PROMPTS:
@@ -647,30 +758,9 @@ class AOIDialogueEngine:
     def start_new_session(self):
         self._init_session_states()
 
-    def run_turn(self, user_input):
-        self._all_turns.append({"role": "user", "content": user_input})
-        self._session_history.append({"type": "user_input", "content": user_input, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
-
-        """Step 1: Domain Prediction (DP)"""
-        messages_for_dp = make_domain_prediction_messages(
-            PROMPTS[self.locale]["domain_prediction_system_message"],
-            DOMAIN_PREDICTION_EXAMPLES[self.locale],
-            self._all_turns
-        )
-
-        responses_for_dp = self._get_model_response(
-            messages=messages_for_dp, 
-            model_name_or_path=self.model_name,
-            temperature=0.3,
-            max_tokens=8,
-            n_seqs=1,
-            continue_final_message=True
-        )
-        print(f"DEBUG: Responses for DP: {responses_for_dp}")
-        turn_domain = parse_response_to_predicted_domain(responses_for_dp[0]['content'])
+    def _single_function_call_pipeline(self, turn_domain):
         candidate_functions, current_function = get_functions_in_domain(turn_domain, DOMAIN_TO_FUNCTION_MAPPING, FUNCTION_SCHEMAS[self.locale])
         fnc_name, fnc_arguments, fnc_results = None, None, None
-        self._session_history.append({"type": "domain_prediction", "content": {"turn_domain": turn_domain, "candidate_functions": candidate_functions, "current_function": current_function}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
 
         if candidate_functions is not None:
             """Step 2: Dialogue State Tracking (DST)"""
@@ -725,15 +815,127 @@ class AOIDialogueEngine:
         response = response_for_response[0]['content']
         self._all_turns.append({"content": response, "role": "assistant"})
         self._session_history.append({"type": "response_generation", "content": {"response": response}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+        
+        return response
+        
+
+    def _recall_pipeline(self, turn_domain):
+        # Reflect-Act
+        """Step 1: Reflect on retrieval strategy"""
+        messages_for_reflection = make_recall_reflection_messages(
+            PROMPTS[self.locale]["recall_reflection_system_message"],
+            self._all_turns
+        )
+        responses_for_reflection = self._get_model_response(
+            messages=messages_for_reflection, 
+            model_name_or_path=self.model_name,
+            temperature=0.3,
+            max_tokens=512,
+            n_seqs=1,
+        )
+
+        retrieval_plan = parse_recall_retrieval_plan(responses_for_reflection[0]['content'])
+        self._session_history.append({"type": "recall_retrieval_plan", "content": {"retrieval_plan": retrieval_plan}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+
+        retrieved_memory = []
+        print(f"DEBUG: Retrieval plan: {retrieval_plan}")
+        """Step 2: Act on the retrieval plan"""
+        for retrieval_step in retrieval_plan:
+            candidate_functions, current_function = get_functions_in_domain(turn_domain, DOMAIN_TO_FUNCTION_MAPPING, FUNCTION_SCHEMAS[self.locale])
+            print(f"DEBUG: Candidate functions: {candidate_functions}")
+            print(f"DEBUG: Current function: {current_function}")
+            print(f"DEBUG: Retrieval step: {retrieval_step}")
+
+            messages_for_act = make_recall_act_messages(
+                PROMPTS[self.locale]["recall_act_system_message"],
+                retrieval_step,
+                self._all_turns,
+                self.locale
+            )
+            responses_for_act = self._get_model_response(
+                messages=messages_for_act, 
+                model_name_or_path=self.model_name,
+                temperature=0.3,
+                max_tokens=512,
+                n_seqs=1,
+                functions=candidate_functions,
+                function_call=current_function,
+            )
+            self._session_history.append({"type": "recall_act", "content": {"retrieval_step": retrieval_step, "response": responses_for_act[0]}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+            fnc_name, fnc_arguments = parse_response_to_predicted_function(
+                responses_for_act[0], 
+                current_function, 
+                self.model_name,
+            )
+            fnc_results = ""
+            if check_executable(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale]):
+                fnc_results = execute_function(fnc_name, fnc_arguments, FUNCTION_SCHEMAS[self.locale], locale=self.locale)
+            
+            print(f"DEBUG: Fnc results: {fnc_results}")
+            self._session_history.append({"type": "recall_function_execution", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments, "fnc_results": fnc_results}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+            retrieved_memory.append(fnc_results)
+            break #TODO 
+        
+        print(f"DEBUG: Retrieved memory: {retrieved_memory}")
+        """Step 3: Generate Response"""
+        messages_for_recall_response = make_recall_response_generation_messages(
+            PROMPTS[self.locale]["recall_response_system_message"],
+            "\n".join(retrieved_memory),
+            self._all_turns,
+            locale=self.locale
+        )
+        response_for_recall_response = self._get_model_response(
+            messages=messages_for_recall_response, 
+            model_name_or_path=self.model_name,
+            temperature=0.3,
+            max_tokens=1024,
+            n_seqs=1,
+        )
+
+        return response_for_recall_response[0]['content']
+
+
+
+
+        
+    def run_turn(self, user_input):
+        self._all_turns.append({"role": "user", "content": user_input})
+        self._session_history.append({"type": "user_input", "content": user_input, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+
+        """Step 1: Domain Prediction (DP)"""
+        messages_for_dp = make_domain_prediction_messages(
+            PROMPTS[self.locale]["domain_prediction_system_message"],
+            DOMAIN_PREDICTION_EXAMPLES[self.locale],
+            self._all_turns
+        )
+
+        responses_for_dp = self._get_model_response(
+            messages=messages_for_dp, 
+            model_name_or_path=self.model_name,
+            temperature=0.3,
+            max_tokens=8,
+            n_seqs=1,
+            continue_final_message=True
+        )
+        print(f"DEBUG: Responses for DP: {responses_for_dp}")
+        turn_domain = parse_response_to_predicted_domain(responses_for_dp[0]['content'])
+        self._session_history.append({"type": "domain_prediction", "content": {"turn_domain": turn_domain}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
+
+        """Step 2: Run respective pipeline"""
+        response = ""
+        if turn_domain in ["[general]", "[bocha]", "[news]", "[cook]", "[wiki]"]:
+            response = self._single_function_call_pipeline(turn_domain)
+        elif turn_domain in ["[recall]"]:
+            response = self._recall_pipeline(turn_domain)
+        else:
+            response = "I'm sorry, I don't know how to answer that."
+
+        """Logging to disk"""
         with open(self._session_save_fpath, "a") as f:
             json.dump(self._session_history, f)
             f.write("\n")
         with open(self._turns_save_fpath, "a") as f:
             json.dump(self._all_turns, f)
             f.write("\n")
-        
         return response
-
-    
-    
 

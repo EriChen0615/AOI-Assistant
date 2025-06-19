@@ -1,5 +1,41 @@
 import requests
 import os
+import json
+
+def do_recall_memory(query, time_range=None, source_type=None, tags=None):
+    """
+    Recall memory from the local FastAPI server.
+
+    Args:
+        query (str): The query to search the memory store for.
+        time_range (str): The time range to search the memory store for.
+        source_type (str): The type of the source of the memory.
+        tags (list): The tags of the memory.
+
+    Returns:
+        str: The recalled memory or an error message.
+    """
+    url = "http://localhost:5050/recall"
+    params = {
+        "query": query,
+        "time_range": time_range,
+        "source_type": source_type,
+        "tags": ",".join(tags) if tags else None
+    }
+
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()  # Remove json.loads() since response.json() already returns parsed JSON
+        linearized_data = []
+        for item in data:
+            mem_id, content, timestamp, source, title = item[0], item[1], item[2], item[3], item[4]
+            linearized_data.append(f"Memory ID: {mem_id}\nTitle: {title}\nContent: {content}\nTimestamp: {timestamp}\nSource: {source}")
+        linearized_data = "\n\n---\n\n".join(linearized_data)
+        print(f"DEBUG: Linearized returned value: {linearized_data}")
+        return linearized_data
+    except requests.exceptions.RequestException as e:
+        return f"Error making request to recall memory: {str(e)}"
 
 def do_search_bocha(query, num_results=10, freshness="noLimit", include=None, answer=False, stream=False):
     """

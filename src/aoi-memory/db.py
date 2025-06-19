@@ -78,6 +78,16 @@ def insert_memory(item: MemoryItem):
     conn.commit()
     conn.close()
 
+def recall_memory(query: str, time_range: str, source_type: str, tags: List[str]):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        SELECT * FROM memory 
+        WHERE content LIKE ? 
+        OR source LIKE ? 
+    """, (f"%{query}%", f"%{query}%"))
+    return c.fetchall()
+
 # --- FastAPI setup ---
 app = FastAPI()
 init_db()
@@ -86,4 +96,10 @@ init_db()
 def remember(item: MemoryItem):
     insert_memory(item)
     return {"status": "ok", "message": "Memory stored successfully."}
+
+@app.get("/recall")
+def recall(query: str, time_range: str, source_type: str, tags: List[str]):
+    return recall_memory(query, time_range, source_type, tags)
+
+
 

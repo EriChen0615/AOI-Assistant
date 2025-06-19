@@ -15,13 +15,14 @@ Usage: PYTHONPATH=. python demo/async_aoi.py
 DEBUG_LOGGING = True
 INPUT_MODE = "keyboard" # Options: keyboard, voice
 OUTPUT_MODE = "console" # Options: console, speaker
+OPEN_ANOTHER_TERMINAL_FOR_RESPONSE = False # Options: True, False
+# Language switch - set to "ZH" for Chinese, "EN" for English
+LANGUAGE = "EN" # Options: ZH, EN
 
 OPENAI_API_KEY_FILE = "configs/openai_api_key"
 SYSTEM_MSG_EN = "You are AOI (pronounced as ah-o-e), a LLM-driven personal assistant built by Jinghong Chen. Your response should be oral and brief."
 SYSTEM_MSG_ZH = "你叫小蓝，是一个由大语言模型驱动的个人助理. 你的作者是陈镜鸿。你的回答应该口语化，简洁明了。"
 
-# Language switch - set to "ZH" for Chinese, "EN" for English
-LANGUAGE = "EN" # Options: ZH, EN
 
 import asyncio
 import logging
@@ -48,10 +49,6 @@ import requests
 # Import the dialogue engine
 sys.path.append('src')
 from aoi.dialogue_engine import AOIDialogueEngine
-
-""" ===================== Hyper-Parameters ===================== """
-DEBUG_LOGGING = True
-LANGUAGE = "ZH"
 
 """ ===================== Logging ===================== """
 # Set up logging with configurable debug level
@@ -604,7 +601,8 @@ class AOIConsoleUI(AOIModule):
         self._logger.info("ConsoleUI started")
         
         # Open separate terminal for responses
-        self._open_response_terminal()
+        if OPEN_ANOTHER_TERMINAL_FOR_RESPONSE:
+            self._open_response_terminal()
         
         # Print welcome message only once
         if not self._initialized:

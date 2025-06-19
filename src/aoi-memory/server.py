@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from schema import MemoryItem
-from db import init_db, insert_memory
+from db import init_db, insert_memory, recall_memory
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from typing import List
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +19,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 init_db()
+
+@app.get("/recall")
+def recall(query: str, time_range: str=None, source_type: str=None, tags: List[str]=None):
+    logger.info(f"Recall memory: {query}, {time_range}, {source_type}, {tags}")
+    return recall_memory(query, time_range, source_type, tags)
 
 @app.post("/remember")
 def remember(item: MemoryItem):
