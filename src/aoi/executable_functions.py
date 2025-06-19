@@ -128,6 +128,8 @@ def do_search_bocha(query, num_results=10, freshness="noLimit", include=None, an
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
+def do_search_bocha_websearch(query, num_results=10, freshness="noLimit", include=None, answer=False, stream=False):
+    pass
 # Replace the old search functions with Bocha search
 def do_search_wiki(query, num_results=10):
     """
