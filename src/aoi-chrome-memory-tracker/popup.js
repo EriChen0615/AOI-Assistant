@@ -207,9 +207,9 @@ document.getElementById('toggle-passive').addEventListener('click', async () => 
     updatePassiveUI(response.passiveTrackingActive);
     addConsoleMessage('passive', `Passive tracking: ${response.passiveTrackingActive ? 'ENABLED' : 'DISABLED'}`);
   }, 100);
-});
-
-document.getElementById('export').addEventListener('click', () => {
+  });
+  
+  document.getElementById('export').addEventListener('click', () => {
   addConsoleMessage('info', 'Exporting memories...');
   
   try {
@@ -222,15 +222,15 @@ document.getElementById('export').addEventListener('click', () => {
       
       // Check if downloads API is available
       if (chrome.downloads) {
-        chrome.downloads.download({
-          url,
-          filename: `ambient-memories-${Date.now()}.json`,
-          saveAs: true
+      chrome.downloads.download({
+        url,
+        filename: `ambient-memories-${Date.now()}.json`,
+        saveAs: true
         }).then(() => {
           addConsoleMessage('info', `Exported ${memories.length} memories`);
         }).catch((error) => {
           addConsoleMessage('error', `Export failed: ${error.message}`);
-        });
+    });
       } else {
         addConsoleMessage('error', 'Downloads API not available');
       }
@@ -242,4 +242,4 @@ document.getElementById('export').addEventListener('click', () => {
 
 document.getElementById('clear-console').addEventListener('click', () => {
   clearConsole();
-});
+  });

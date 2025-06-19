@@ -94,70 +94,70 @@ if (window.aoiMemoryTrackerInitialized) {
   function handleMouseOver(e) {
     if (!isActive) return;
     
-    e.target.style.outline = '2px solid red';
+  e.target.style.outline = '2px solid red';
     hoverElements.add(e.target);
   }
 
   function handleMouseOut(e) {
     if (!isActive) return;
     
-    e.target.style.outline = '';
+  e.target.style.outline = '';
     hoverElements.delete(e.target);
   }
 
   function handleClick(e) {
     if (!isActive) return;
     
-    e.preventDefault();
-    e.stopPropagation();
+  e.preventDefault();
+  e.stopPropagation();
 
-    const content = e.target.innerText || e.target.alt || e.target.src || '';
-    const timestamp = new Date().toISOString();
-    const source = window.location.href;
-    const device = "chrome_extension";
-    const type = "dom_selection";
-    const source_type = "active";
-    const tags = [];  // Optionally auto-generate later
+  const content = e.target.innerText || e.target.alt || e.target.src || '';
+  const timestamp = new Date().toISOString();
+  const source = window.location.href;
+  const device = "chrome_extension";
+  const type = "dom_selection";
+  const source_type = "active";
+  const tags = [];  // Optionally auto-generate later
 
-    // DOM-level metadata
-    const elementData = {
-      tag: e.target.tagName,
-      id: e.target.id,
-      class: e.target.className
-    };
+  // DOM-level metadata
+  const elementData = {
+    tag: e.target.tagName,
+    id: e.target.id,
+    class: e.target.className
+  };
 
-    const metadata = {
-      ...getPageMetadata(),
-      ...elementData
-    };
+  const metadata = {
+    ...getPageMetadata(),
+    ...elementData
+  };
 
-    const payload = {
-      content,
-      timestamp,
-      source,
-      device,
-      type,
-      source_type,
-      tags,
-      metadata
-    };
+  const payload = {
+    content,
+    timestamp,
+    source,
+    device,
+    type,
+    source_type,
+    tags,
+    metadata
+  };
 
-    fetch("http://127.0.0.1:5050/remember", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    })
-    .then(res => {
-      if (res.ok) {
-        alert("✅ Memory saved!");
-      } else {
-        alert("⚠️ Failed to save memory.");
-      }
-    })
-    .catch(err => {
-      console.error("Error saving memory:", err);
-      alert("🚫 Error connecting to memory server.");
-    });
+  fetch("http://127.0.0.1:5050/remember", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })
+  .then(res => {
+    if (res.ok) {
+      alert("✅ Memory saved!");
+    } else {
+      alert("⚠️ Failed to save memory.");
+    }
+  })
+  .catch(err => {
+    console.error("Error saving memory:", err);
+    alert("🚫 Error connecting to memory server.");
+  });
   }
 
   function getPageMetadata() {

@@ -271,7 +271,7 @@ class AudioRecorder:
 
 class AOIAudioListener(AOIModule):
     """Handles audio recording and transcription"""
-    def __init__(self, event_bus: EventBus, model_name: str = "whisper-1"):
+    def __init__(self, event_bus: EventBus, model_name: str = "gpt-4o-mini-transcribe"):
         event_types_to_subscribe = {
             EventType.STATUS_UPDATE
         }

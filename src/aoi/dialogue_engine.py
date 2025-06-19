@@ -725,10 +725,12 @@ class AOIDialogueEngine:
         response = response_for_response[0]['content']
         self._all_turns.append({"content": response, "role": "assistant"})
         self._session_history.append({"type": "response_generation", "content": {"response": response}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
-        with open(self._session_save_fpath, "w") as f:
+        with open(self._session_save_fpath, "a") as f:
             json.dump(self._session_history, f)
-        with open(self._turns_save_fpath, "w") as f:
+            f.write("\n")
+        with open(self._turns_save_fpath, "a") as f:
             json.dump(self._all_turns, f)
+            f.write("\n")
         
         return response
 
