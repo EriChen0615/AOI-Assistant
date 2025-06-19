@@ -53,10 +53,11 @@ PROMPTS = {
         "domain_prediction_system_message": (
             "你是小蓝，一个由陈镜鸿构建的任务导向助手。你的回答应该口语化且简洁。 "
             "你的角色是确定用户在对话的每个回合中寻求信息或尝试预订的领域。 "
-            "从以下选项中选择最相关的领域：[wiki]，[news]，[cook]。 "
+            "从以下选项中选择最相关的领域：[wiki]，[news]，[cook], [bocha]。 "
             "选择[wiki]用于知识查询。"
             "选择[news]用于最近事件的查询。"
             "选择[cook]用于菜谱和烹饪查询。"
+            "选择[bocha]用于其他网络搜索。"
             "如果用户的询问与特定领域不符，请使用：[general]。 "
         ),
         "tod_instruction": "你是一个任务导向的助手。你可以使用给定的函数来获取更多数据来帮助用户。",
@@ -107,6 +108,10 @@ DOMAIN_PREDICTION_EXAMPLES = {
             "\nuser: 好的，谢谢，祝你有美好的一天！"
             "\nassistant: " + domain_prefix + "[general]" + domain_suffix
         ),
+        (
+            "\nuser: 最近股市怎么样?"
+            "\nassistant: " + domain_prefix + "[bocha]" + domain_suffix
+        ),
     ]
 }
 
@@ -114,9 +119,10 @@ DOMAIN_TO_FUNCTION_MAPPING =  {
     "[wiki]": ["search_wiki"],
     "[news]": ["search_news"],
     "[cook]": ["search_cookbook"],
+    "[bocha]": ["search_bocha"],
 }
 
-from aoi.executable_functions import do_search_wiki, do_search_news, do_search_cookbook
+from aoi.executable_functions import do_search_wiki, do_search_news, do_search_cookbook, do_search_bocha
 
 # Locale-specific function schemas
 FUNCTION_SCHEMAS = {
@@ -189,6 +195,38 @@ FUNCTION_SCHEMAS = {
                 }
             },
             "executable_fn": do_search_cookbook
+        },
+        "search_bocha": {
+            "type": "function",
+            "name": "search_bocha",
+            "function": {
+                "name": "search_bocha",
+                "description": "Search the web using Bocha AI search engine",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "The number of results to return (max 50)"
+                        },
+                        "freshness": {
+                            "type": "string",
+                            "description": "Time range filter: oneDay, oneWeek, oneMonth, oneYear, noLimit",
+                            "enum": ["oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit"]
+                        },
+                        "include": {
+                            "type": "string",
+                            "description": "Site restrictions (e.g., 'qq.com|m.163.com')"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_bocha
         }
     },
     "ZH": {
@@ -260,6 +298,38 @@ FUNCTION_SCHEMAS = {
                 }
             },
             "executable_fn": do_search_cookbook
+        },
+        "search_bocha": {
+            "type": "function",
+            "name": "search_bocha",
+            "function": {
+                "name": "search_bocha",
+                "description": "使用Bocha AI搜索引擎搜索网络",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索查询"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "要返回的结果数量（最多50个）"
+                        },
+                        "freshness": {
+                            "type": "string",
+                            "description": "时间范围过滤器：oneDay（一天内）, oneWeek（一周内）, oneMonth（一个月内）, oneYear（一年内）, noLimit（不限）",
+                            "enum": ["oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit"]
+                        },
+                        "include": {
+                            "type": "string",
+                            "description": "网站限制（例如：'qq.com|m.163.com'）"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "executable_fn": do_search_bocha
         }
     }
 }
@@ -365,6 +435,7 @@ def parse_response_to_predicted_domain(response):
         "wiki",
         "news",
         "cook",
+        "bocha",
         "general",
     ]:
         if d in response:
