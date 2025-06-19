@@ -3,17 +3,66 @@
 <head>
   <title>AOI Memory Tracker</title>
   <style>
-    body { width: 300px; padding: 15px; font-family: Arial, sans-serif; }
+    body { width: 350px; padding: 15px; font-family: Arial, sans-serif; }
     button { width: 100%; padding: 10px; margin: 5px 0; border: none; border-radius: 5px; cursor: pointer; }
-    #status { font-weight: bold; margin-bottom: 10px; }
-    #log { margin-top: 10px; font-size: 12px; max-height: 200px; overflow-y: auto; }
+    #status, #passive-status { font-weight: bold; margin-bottom: 10px; }
+    .section { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+    #console { 
+      margin-top: 10px; 
+      font-size: 11px; 
+      max-height: 200px; 
+      overflow-y: auto; 
+      background: #f5f5f5; 
+      border: 1px solid #ddd; 
+      border-radius: 3px; 
+      padding: 8px;
+      font-family: 'Courier New', monospace;
+    }
+    .console-entry { 
+      margin-bottom: 3px; 
+      word-wrap: break-word; 
+    }
+    .console-time { 
+      color: #666; 
+      font-size: 10px; 
+    }
+    .console-info { color: #0066cc; }
+    .console-warn { color: #cc6600; }
+    .console-error { color: #cc0000; }
+    .console-passive { color: #006600; }
+    .console-clear { 
+      background: #ff4444; 
+      color: white; 
+      padding: 5px 10px; 
+      font-size: 10px; 
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
-  <div id="status">Memory Mode: INACTIVE</div>
-  <button id="toggle">Activate</button>
-  <button id="export">Export Memories</button>
-  <div id="log"></div>
+  <div class="section">
+    <div id="status">Memory Mode: INACTIVE</div>
+    <button id="toggle">Activate</button>
+  </div>
+  
+  <div class="section">
+    <div id="passive-status">Passive Tracking: ACTIVE</div>
+    <button id="toggle-passive">Disable Passive</button>
+  </div>
+  
+  <div class="section">
+    <button id="export">Export Memories</button>
+  </div>
+  
+  <div class="section">
+    <div style="font-weight: bold; margin-bottom: 5px;">
+      Console Output
+      <span id="new-messages-indicator" style="display: none; color: #ff6600; font-size: 10px; margin-left: 10px;">● NEW</span>
+    </div>
+    <div id="console"></div>
+    <button id="clear-console" class="console-clear">Clear Console</button>
+  </div>
+  
   <script src="popup.js"></script>
 </body>
 </html>

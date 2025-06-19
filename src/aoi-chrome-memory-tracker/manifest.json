@@ -3,7 +3,7 @@
     "name": "AOI Ambient Memory Tracker for Chrome",
     "version": "1.0",
     "description": "Track browser usage for personal ambient assistant AOI.",
-    "permissions": ["tabs", "storage", "idle", "scripting", "activeTab"],
+    "permissions": ["tabs", "storage", "idle", "scripting", "activeTab", "downloads"],
     "host_permissions": [
       "<all_urls>",
       "http://localhost:5050/",
