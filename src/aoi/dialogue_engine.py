@@ -874,7 +874,6 @@ class AOIDialogueEngine:
             print(f"DEBUG: Fnc results: {fnc_results}")
             self._session_history.append({"type": "recall_function_execution", "content": {"fnc_name": fnc_name, "fnc_arguments": fnc_arguments, "fnc_results": fnc_results}, "timestamp": datetime.now().strftime("%Y%m%d-%H%M%S")})
             retrieved_memory.append(fnc_results)
-            break #TODO 
         
         print(f"DEBUG: Retrieved memory: {retrieved_memory}")
         """Step 3: Generate Response"""
