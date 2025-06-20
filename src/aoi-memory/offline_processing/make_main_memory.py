@@ -217,15 +217,11 @@ def MakeMemByClustering(events, llm_model):
                 messages=llm_input_meesages,
             )
             llm_resp = response.choices[0].message.content
-            print(llm_resp)
-            breakpoint()
             memory_items = _parse_llm_resp_to_memory_items(events_to_cluster,llm_resp)
-            print(memory_items)
-            breakpoint()
             all_memory_items.extend(memory_items)
     return all_memory_items
 
-def AugmentEvent(event, llm_model):
+def AugmentMemoryItem(memory_item, llm_model):
     pass
 
 def UpdateDatabase(memory_items, db_path, db_type):
@@ -245,8 +241,8 @@ def main(args):
         memory_items = MakeMemByClustering(events, llm_model=args.llm_model)
 
         """Step 4: Augment memory items with LLM"""
-        AugmentEventFnc = partial(AugmentEvent, llm_model=args.llm_model)
-        memory_items = map(AugmentEventFnc, memory_items)
+        AugmentMemoryItemFnc = partial(AugmentMemoryItem, llm_model=args.llm_model)
+        memory_items = map(AugmentMemoryItemFnc, memory_items)
         all_memory_items.extend(memory_items)
 
     """Step 5: Update database"""
