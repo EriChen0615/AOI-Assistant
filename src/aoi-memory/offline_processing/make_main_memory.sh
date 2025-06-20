@@ -1,5 +1,6 @@
 #! /bin/bash
 
+export OPENAI_API_KEY=$(cat ../../configs/openai_api_key)
 python offline_processing/make_main_memory.py \
     --input_db_type sqlite \
     --input_db_path data/memory_0620.db \

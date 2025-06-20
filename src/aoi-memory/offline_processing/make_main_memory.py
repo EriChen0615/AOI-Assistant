@@ -22,7 +22,7 @@ all_memory_items = MakeMainMemory(all_events)
 retrieval_db = UpdateDatabase(all_memory_items)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 @dataclass
 class CapturedEvent:
@@ -38,11 +38,12 @@ class CapturedEvent:
 @dataclass
 class MemoryItem:
     _id: str
-    key: str
-    summary: str
     recall_cue: str
-    tags: str
-    detail_content: dict
+    source_event_ids: List[str] 
+    key: str = ""
+    summary: str = ""
+    tags: str = ""
+    detail_content: dict = field(default_factory=dict)
 
 import argparse
 def get_args():
@@ -138,24 +139,107 @@ def FilterEvent(event):
     else:
         return False
 
+import os
+from tqdm import tqdm
+import uuid
+def MakeMemByClustering(events, llm_model):
+    LLM_INSTRUCTION = (
+        "You are a helpful assistant that clusters events into memory items. "
+        "User will providea list of events indexed by Event 0, 1, ..., etc."
+        "You should cluster similar events into a memory item and provide a cue for recalling the memory item. The cue should be a single sentence that succiently summarizes the memory item."
+        "You should use the events with CaptureType=active to guide your recall cue. But you should not omit events with CaptureType=passive entirely."
+        "You should aim to produce no more than 10 memory items while making sure that far-apart events that are captured in different memory items."
+        "You should respond in the following format: "
+        "[Reasoning] ...\n"
+        "[Memory Item 1] Events=[<event indices> ... ] <sep> Recall Cue=...\n"
+        "[Memory Item 2] Events=[<event indices> ... ] <sep> Recall Cue=...\n"
+        "You may use the shorthand <start_idx>-<end_idx> to represent a continuous range of event indices."
+    )
+    def _make_memory_item_id():
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d-%H")
+        uuid_str = str(uuid.uuid4())[:8]  # Take first 8 characters for readability
+        id_str = f"{timestamp}-{uuid_str}"
+        return id_str
+    
+    def _parse_llm_resp_to_memory_items(events, llm_resp):
+        memory_items = []
+        for line in llm_resp.split("\n"):
+            if line.startswith("[Memory Item"):
+                event_indices = []
+                to_parse = line.split("Events=[")[1].split("]")[0].strip().split(',')
+                for v in to_parse:
+                    if '-' in v:
+                        try:
+                            start_idx, end_idx = v.split('-')
+                            event_indices.extend(range(int(start_idx), int(end_idx)+1))
+                        except Exception as e:
+                            print(f"Error parsing event indices: {e}")
+                            print(f"string to parse: {v}")
+                    else:
+                        try:
+                            event_indices.append(int(v))
+                        except Exception as e:
+                            print(f"Error parsing event indices: {e}")
+                            print(f"string to parse: {v}")
+
+                source_events = []
+                for idx in event_indices:
+                    if int(idx) < len(events):
+                        source_events.append(events[int(idx)])
+                    else:
+                        print(f"Event index out of range: {idx}")
+                        print(f"events length: {len(events)}")
+                memory_items.append(MemoryItem(
+                    _id=_make_memory_item_id(),
+                    recall_cue=line.split("<sep>")[1].split("Recall Cue=")[1].strip(),
+                    source_event_ids=[event._id for event in source_events]
+                ))
+        return memory_items
+
+    all_memory_items = []
+    if llm_model in ["gpt-4o-mini", "gpt-4.1-nano"]:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        for i in tqdm(range(0, len(events), 100), total=len(events)//100 + 1, desc=f"Clustering events into memory items with LLM={llm_model}"):
+            events_to_cluster = events[i:i+100]
+            system_message = LLM_INSTRUCTION
+            user_message = "\n".join([
+                "Event {}: CaptureType={}; Device={}; Location={}; Timestamp={}; Content={}; ".format(
+                    i, event.capture_type, event.device, event.location, event.timestamp, event.content.replace("\n", " "))
+                for i, event in enumerate(events_to_cluster)])
+            llm_input_meesages = [
+                {"role": "system", "content": system_message}, 
+                {"role": "user", "content": user_message}
+            ]
+            response = client.chat.completions.create(
+                model=llm_model,
+                messages=llm_input_meesages,
+            )
+            llm_resp = response.choices[0].message.content
+            print(llm_resp)
+            breakpoint()
+            memory_items = _parse_llm_resp_to_memory_items(events_to_cluster,llm_resp)
+            print(memory_items)
+            breakpoint()
+            all_memory_items.extend(memory_items)
+    return all_memory_items
+
 def AugmentEvent(event, llm_model):
     pass
 
 def UpdateDatabase(memory_items, db_path, db_type):
     pass
 
-def MakeMemByClustering(events, llm_model):
-    pass
 
 from functools import partial
 def main(args):
     all_memory_items = []
     for events in ReadEventsSliceByTime(args.input_db_path, args.input_db_type, args.timeslice_size):
-        print("Before filtering len(events)= ", len(events))
         """Step 1: Filter & normalize events"""
+        print("Before filtering len(events)= ", len(events))
         events = list(filter(FilterEvent, events))
         print("After filtering len(events)= ", len(events))
-        breakpoint()
 
         """Step 3: Make memory items by LLM generative clustering"""
         memory_items = MakeMemByClustering(events, llm_model=args.llm_model)
